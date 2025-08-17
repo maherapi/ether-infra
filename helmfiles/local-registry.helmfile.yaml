@@ -1,0 +1,217 @@
+# Local Container Registry Helmfile
+# Deploys local container registry for image storage and management
+
+environments:
+  local:
+    values:
+      - ../environments/local.yaml
+  staging:
+    values:
+      - ../environments/staging.yaml
+  production:
+    values:
+      - ../environments/production.yaml
+
+---
+releases:
+  # Docker Registry
+  - name: docker-registry
+    condition: "{{ .Values.registry.enabled }}"
+    namespace: "{{ .Values.global.namespaces.registry }}"
+    chart: "twuni/docker-registry"
+    version: "2.2.2"
+    values:
+      - image:
+          repository: registry
+          tag: "2.8.3"
+          pullPolicy: IfNotPresent
+      - replicaCount: "{{ .Values.registry.replicas | default 1 }}"
+      - service:
+          name: docker-registry
+          type: ClusterIP
+          port: 5000
+          annotations:
+            {{- if eq .Environment.Name "local" }}
+            {}
+            {{- else }}
+            service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+            {{- end }}
+      - resources: "{{ .Values.registry.resources }}"
+      - persistence:
+          enabled: "{{ .Values.registry.persistence.enabled }}"
+          size: "{{ .Values.registry.persistence.size }}"
+          storageClass: "{{ .Values.global.storage.class }}"
+          accessMode: ReadWriteOnce
+      - secrets:
+          htpasswd: "{{ .Values.registry.security.auth.enabled | default false | ternary \"registry-auth\" \"\" }}"
+          s3:
+            secretRef: ""
+      - configData:
+          version: 0.1
+          log:
+            level: "{{ eq .Environment.Name \"local\" | ternary \"debug\" \"info\" }}"
+            fields:
+              service: registry
+          storage:
+            filesystem:
+              rootdirectory: /var/lib/registry
+            delete:
+              enabled: true
+            cache:
+              blobdescriptor: inmemory
+          http:
+            addr: :5000
+            headers:
+              X-Content-Type-Options: [nosniff]
+              Access-Control-Allow-Origin: ['*']
+              Access-Control-Allow-Methods: ['HEAD', 'GET', 'OPTIONS', 'DELETE']
+              Access-Control-Allow-Headers: ['Authorization', 'Accept', 'Cache-Control']
+          health:
+            storagedriver:
+              enabled: true
+              interval: 10s
+              threshold: 3
+          {{- if .Values.registry.security.auth.enabled }}
+          auth:
+            htpasswd:
+              realm: basic-realm
+              path: /auth/htpasswd
+          {{- end }}
+      - tolerations: []
+      - affinity:
+          podAntiAffinity:
+            preferredDuringSchedulingIgnoredDuringExecution:
+              - weight: 100
+                podAffinityTerm:
+                  labelSelector:
+                    matchLabels:
+                      app: docker-registry
+                  topologyKey: kubernetes.io/hostname
+
+  # Registry UI (for management and browsing)
+  - name: registry-ui
+    condition: "{{ and .Values.registry.enabled .Values.registry.ui.enabled }}"
+    namespace: "{{ .Values.global.namespaces.registry }}"
+    chart: "./charts/registry-ui"
+    needs:
+      - docker-registry
+    values:
+      - image:
+          repository: joxit/docker-registry-ui
+          tag: "2.5.4"
+          pullPolicy: IfNotPresent
+      - replicaCount: 1
+      - service:
+          type: ClusterIP
+          port: 80
+      - resources:
+          limits:
+            cpu: 100m
+            memory: 128Mi
+          requests:
+            cpu: 50m
+            memory: 64Mi
+      - env:
+          SINGLE_REGISTRY: "true"
+          REGISTRY_TITLE: "Ethereum Node Registry ({{ .Environment.Name }})"
+          DELETE_IMAGES: "true"
+          SHOW_CONTENT_DIGEST: "true"
+          NGINX_PROXY_PASS_URL: "http://docker-registry:5000"
+          SHOW_CATALOG_NB_TAGS: "true"
+          CATALOG_MIN_BRANCHES: "1"
+          CATALOG_MAX_BRANCHES: "1"
+          TAGLIST_PAGE_SIZE: "100"
+          REGISTRY_SECURED: "{{ .Values.registry.security.auth.enabled | default false }}"
+          CATALOG_ELEMENTS_LIMIT: "1000"
+
+  # Registry Cleaner CronJob
+  - name: registry-cleaner
+    condition: "{{ .Values.registry.enabled }}"
+    namespace: "{{ .Values.global.namespaces.registry }}"
+    chart: "./charts/registry-cleaner"
+    needs:
+      - docker-registry
+    values:
+      - schedule: "0 2 * * 0"  # Weekly on Sunday at 2 AM
+      - image:
+          repository: registry
+          tag: "2.8.3"
+          pullPolicy: IfNotPresent
+      - resources:
+          limits:
+            cpu: 200m
+            memory: 256Mi
+          requests:
+            cpu: 100m
+            memory: 128Mi
+      - env:
+          REGISTRY_URL: "http://docker-registry:5000"
+          DRY_RUN: "{{ eq .Environment.Name \"local\" | ternary \"true\" \"false\" }}"
+          KEEP_TAGS: "{{ eq .Environment.Name \"production\" | ternary \"10\" \"5\" }}"
+          OLDER_THAN: "{{ eq .Environment.Name \"production\" | ternary \"30d\" \"7d\" }}"
+
+  # Registry Auth Secret (for secured registries)
+  - name: registry-auth
+    condition: "{{ and .Values.registry.enabled .Values.registry.security.auth.enabled }}"
+    namespace: "{{ .Values.global.namespaces.registry }}"
+    chart: "./charts/registry-auth"
+    values:
+      - auth:
+          users:
+            ethereum:
+              password: "ethereum-registry-pass"
+              email: "registry@ethereum.dev"
+            snapshot:
+              password: "snapshot-service-pass"
+              email: "snapshots@ethereum.dev"
+
+  # Registry Backup (for production)
+  - name: registry-backup
+    condition: "{{ and .Values.registry.enabled .Values.registry.backup.enabled }}"
+    namespace: "{{ .Values.global.namespaces.registry }}"
+    chart: "./charts/registry-backup"
+    needs:
+      - docker-registry
+    values:
+      - schedule: "{{ .Values.registry.backup.schedule }}"
+      - image:
+          repository: alpine/aws-cli
+          tag: "latest"
+          pullPolicy: IfNotPresent
+      - resources:
+          limits:
+            cpu: 200m
+            memory: 256Mi
+      - backup:
+          destination: "s3://ethereum-registry-backup/{{ .Environment.Name }}"
+          retention: "{{ eq .Environment.Name \"production\" | ternary \"90d\" \"30d\" }}"
+      - env:
+          AWS_DEFAULT_REGION: "us-west-2"
+
+  # Registry Monitoring (ServiceMonitor for Prometheus)
+  - name: registry-monitoring
+    condition: "{{ .Values.registry.enabled }}"
+    namespace: "{{ .Values.global.namespaces.registry }}"
+    chart: "./charts/registry-monitoring"
+    needs:
+      - docker-registry
+    values:
+      - monitoring:
+          enabled: true
+          interval: 30s
+          path: /metrics
+          port: 5000
+          labels:
+            app: docker-registry
+            component: registry
+
+repositories:
+  - name: twuni
+    url: https://helm.twun.io
+
+helmDefaults:
+  createNamespace: true
+  wait: true
+  timeout: 300
+  atomic: true
+  cleanupOnFail: true

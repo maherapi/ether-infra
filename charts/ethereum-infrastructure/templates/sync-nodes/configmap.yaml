@@ -1,0 +1,233 @@
+{{- if .Values.syncNodes.enabled }}
+{{- range $clientName, $clientConfig := .Values.syncNodes.clients }}
+{{- if $clientConfig.enabled }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "ethereum-infrastructure.fullname" $ }}-{{ $clientName }}-config
+  labels:
+    {{- include "ethereum-infrastructure.syncNodeLabels" $ | nindent 4 }}
+    client: {{ $clientName }}
+data:
+  {{- if eq $clientName "geth" }}
+  geth.toml: |
+    [Eth]
+    NetworkId = {{ eq $.Values.ethereum.network "mainnet" | ternary 1 (eq $.Values.ethereum.network "sepolia" | ternary 11155111 5) }}
+    SyncMode = "full"
+    DiscoveryURLs = []
+    
+    [Eth.TxPool]
+    Locals = []
+    NoLocals = false
+    Journal = "transactions.rlp"
+    Rejournal = 3600000000000
+    PriceLimit = 1
+    PriceBump = 10
+    AccountSlots = 16
+    GlobalSlots = 4096
+    AccountQueue = 64
+    GlobalQueue = 1024
+    Lifetime = 10800000000000
+    
+    [Node]
+    DataDir = "/data"
+    IPCPath = "geth.ipc"
+    HTTPHost = "0.0.0.0"
+    HTTPPort = 8545
+    HTTPVirtualHosts = ["*"]
+    HTTPModules = ["net", "web3", "eth"]
+    WSHost = "0.0.0.0"
+    WSPort = 8546
+    WSModules = ["net", "web3", "eth"]
+    
+    [Node.P2P]
+    MaxPeers = 50
+    NoDiscovery = false
+    StaticNodes = []
+    TrustedNodes = []
+    ListenAddr = ":30303"
+    EnableMsgEvents = false
+    
+    [Metrics]
+    HTTP = "0.0.0.0"
+    Port = 6060
+    InfluxDBEndpoint = "http://localhost:8086"
+    InfluxDBDatabase = "geth"
+    InfluxDBUsername = "test"
+    InfluxDBPassword = "test"
+    InfluxDBTags = "host=localhost"
+  {{- else if eq $clientName "nethermind" }}
+  nethermind.cfg: |
+    {
+      "Init": {
+        "WebSocketsEnabled": true,
+        "StoreReceipts": true,
+        "IsMining": false,
+        "ChainSpecPath": "chainspec/{{ $.Values.ethereum.network }}.json",
+        "BaseDbPath": "/data/db",
+        "LogFileName": "/data/logs/nethermind.log",
+        "MemoryHint": 768000000
+      },
+      "EthStats": {
+        "Enabled": false
+      },
+      "Metrics": {
+        "NodeName": "Nethermind",
+        "Enabled": true,
+        "CountersEnabled": true,
+        "ExposePort": 6060
+      },
+      "Network": {
+        "DiscoveryPort": 30303,
+        "P2PPort": 30303,
+        "LocalIp": "0.0.0.0",
+        "ExternalIp": "0.0.0.0",
+        "MaxActivePeers": 50
+      },
+      "JsonRpc": {
+        "Enabled": true,
+        "Host": "0.0.0.0",
+        "Port": 8545,
+        "WebSocketsPort": 8546,
+        "EnabledModules": ["Eth", "Subscribe", "Trace", "TxPool", "Web3", "Personal", "Proof", "Net", "Parity", "Health"]
+      },
+      "Db": {
+        "CacheIndexAndFilterBlocks": false
+      },
+      "Sync": {
+        "FastSync": true,
+        "PivotNumber": 0,
+        "PivotHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "FastBlocks": true,
+        "UseGethLimitsInFastBlocks": false,
+        "FastSyncCatchUpHeightDelta": 10000000000
+      }
+    }
+  {{- else if eq $clientName "erigon" }}
+  erigon.toml: |
+    datadir = "/data"
+    
+    [p2p]
+    port = 30303
+    nat = "any"
+    nodiscover = false
+    maxpeers = 100
+    
+    [rpc]
+    http = true
+    addr = "0.0.0.0"
+    port = 8545
+    api = ["eth", "debug", "net", "trace", "web3", "erigon"]
+    corsdomain = ["*"]
+    vhosts = ["*"]
+    
+    [ws]
+    enabled = true
+    addr = "0.0.0.0"
+    port = 8546
+    api = ["eth", "debug", "net", "trace", "web3", "erigon"]
+    origins = ["*"]
+    
+    [metrics]
+    enabled = true
+    addr = "0.0.0.0"
+    port = 6060
+    
+    [txpool]
+    disable = false
+    locals = []
+    nolocals = false
+    pricelimit = 1
+    pricebump = 10
+    accountslots = 16
+    globalslots = 4096
+  {{- else if eq $clientName "besu" }}
+  besu.conf: |
+    data-path="/data"
+    network="{{ $.Values.ethereum.network }}"
+    
+    # RPC Configuration
+    rpc-http-enabled=true
+    rpc-http-host="0.0.0.0"
+    rpc-http-port=8545
+    rpc-http-api=["ETH","NET","WEB3","ADMIN","DEBUG","TXPOOL"]
+    rpc-http-cors-origins=["*"]
+    
+    # WebSocket Configuration
+    rpc-ws-enabled=true
+    rpc-ws-host="0.0.0.0"
+    rpc-ws-port=8546
+    rpc-ws-api=["ETH","NET","WEB3"]
+    
+    # P2P Configuration
+    p2p-enabled=true
+    p2p-host="0.0.0.0"
+    p2p-port=30303
+    max-peers=64
+    
+    # Metrics Configuration
+    metrics-enabled=true
+    metrics-host="0.0.0.0"
+    metrics-port=9545
+    
+    # Sync Configuration
+    sync-mode="FULL"
+    
+    # Mining Configuration (disabled)
+    miner-enabled=false
+    
+    # Logging
+    logging="INFO"
+  {{- end }}
+  
+  startup.sh: |
+    #!/bin/bash
+    set -e
+    
+    echo "Starting {{ $clientName }} Ethereum client"
+    echo "Network: {{ $.Values.ethereum.network }}"
+    echo "Pod: $POD_NAME"
+    echo "Namespace: $POD_NAMESPACE"
+    echo "Node: $NODE_NAME"
+    
+    # Wait for storage to be ready
+    while [ ! -d "/data" ]; do
+      echo "Waiting for data directory..."
+      sleep 5
+    done
+    
+    # Set proper permissions
+    chown -R 1000:1000 /data
+    
+    # Initialize if first run
+    if [ ! -f "/data/.initialized" ]; then
+      echo "Initializing {{ $clientName }} for first run"
+      {{- if $.Values.ethereum.genesis }}
+      {{- if eq $clientName "geth" }}
+      /usr/local/bin/geth --datadir=/data init /genesis/genesis.json
+      {{- else if eq $clientName "besu" }}
+      /opt/besu/bin/besu --data-path=/data --genesis-file=/genesis/genesis.json
+      {{- end }}
+      {{- end }}
+      touch "/data/.initialized"
+    fi
+    
+    echo "Starting {{ $clientName }} client..."
+    exec "$@"
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{- if and .Values.syncNodes.enabled .Values.ethereum.genesis }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "ethereum-infrastructure.fullname" . }}-genesis
+  labels:
+    {{- include "ethereum-infrastructure.labels" . | nindent 4 }}
+data:
+  genesis.json: |
+    {{- .Values.ethereum.genesis | nindent 4 }}
+{{- end }}

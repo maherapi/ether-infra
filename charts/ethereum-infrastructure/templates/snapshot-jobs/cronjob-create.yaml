@@ -1,0 +1,97 @@
+{{- if .Values.snapshotJobs.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "ethereum-infrastructure.snapshotJobName" . }}-create
+  labels:
+    {{- include "ethereum-infrastructure.snapshotJobLabels" . | nindent 4 }}
+    job-type: create
+spec:
+  schedule: {{ .Values.snapshotJobs.create.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: {{ .Values.snapshotJobs.create.activeDeadlineSeconds }}
+      backoffLimit: {{ .Values.snapshotJobs.create.backoffLimit }}
+      template:
+        metadata:
+          labels:
+            {{- include "ethereum-infrastructure.snapshotJobLabels" . | nindent 12 }}
+            job-type: create
+          annotations:
+            prometheus.io/scrape: "true"
+            prometheus.io/port: "8080"
+            prometheus.io/path: "/metrics"
+        spec:
+          {{- include "ethereum-infrastructure.podSecurityContext" . | nindent 10 }}
+          serviceAccountName: {{ include "ethereum-infrastructure.serviceAccountName" . }}
+          restartPolicy: {{ .Values.snapshotJobs.create.restartPolicy }}
+          {{- with .Values.global.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          containers:
+          - name: snapshot-builder
+            image: {{ include "ethereum-infrastructure.image" .Values.snapshotJobs.create.image }}
+            imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+            {{- include "ethereum-infrastructure.securityContext" . | nindent 12 }}
+            ports:
+            - name: metrics
+              containerPort: 8080
+              protocol: TCP
+            command:
+            - /bin/bash
+            - /scripts/create-snapshot.sh
+            env:
+            - name: JOB_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['job-name']
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: ETHEREUM_NETWORK
+              value: {{ .Values.ethereum.network | quote }}
+            - name: SNAPSHOT_COMPRESSION
+              value: {{ .Values.snapshotJobs.create.compression | quote }}
+            - name: SNAPSHOT_RETENTION
+              value: {{ .Values.snapshotJobs.create.retention | quote }}
+            - name: REGISTRY_URL
+              value: {{ .Values.global.imageRegistry | quote }}
+            - name: REGISTRY_REPOSITORY
+              value: {{ .Values.snapshotJobs.create.registry.repository | quote }}
+            - name: REGISTRY_TAG_TEMPLATE
+              value: {{ .Values.snapshotJobs.create.registry.tag | quote }}
+            - name: REGISTRY_PUSH
+              value: {{ .Values.snapshotJobs.create.registry.push | quote }}
+            {{- range $clientName, $clientConfig := .Values.syncNodes.clients }}
+            {{- if $clientConfig.enabled }}
+            - name: {{ upper $clientName }}_SYNC_NODE_URL
+              value: "http://{{ include "ethereum-infrastructure.syncNodeName" $clientName }}.{{ $.Release.Namespace }}.svc.cluster.local:8545"
+            {{- end }}
+            {{- end }}
+            volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+            {{- include "ethereum-infrastructure.resources" .Values.snapshotJobs.create.resources | nindent 12 }}
+          volumes:
+          - name: workspace
+            emptyDir:
+              sizeLimit: 100Gi
+          - name: scripts
+            configMap:
+              name: {{ include "ethereum-infrastructure.fullname" . }}-snapshot-scripts
+              defaultMode: 0755
+          {{- include "ethereum-infrastructure.nodeSelector" . | nindent 10 }}
+          {{- include "ethereum-infrastructure.tolerations" . | nindent 10 }}
+{{- end }}

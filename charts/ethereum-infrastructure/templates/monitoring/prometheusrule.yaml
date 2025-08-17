@@ -1,0 +1,203 @@
+{{- if and .Values.monitoring.enabled .Values.monitoring.prometheusRule.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "ethereum-infrastructure.fullname" . }}
+  {{- if .Values.monitoring.prometheusRule.namespace }}
+  namespace: {{ .Values.monitoring.prometheusRule.namespace }}
+  {{- end }}
+  labels:
+    {{- include "ethereum-infrastructure.labels" . | nindent 4 }}
+    {{- with .Values.monitoring.prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+  - name: ethereum-infrastructure.rules
+    interval: 30s
+    rules:
+    # Ethereum node availability alerts
+    - alert: EthereumNodeDown
+      expr: up{job="ethereum-nodes"} == 0
+      for: 5m
+      labels:
+        severity: critical
+        component: "{{ "{{ $labels.component }}" }}"
+        client: "{{ "{{ $labels.client }}" }}"
+      annotations:
+        summary: "Ethereum node is down"
+        description: "Ethereum node {{ "{{ $labels.instance }}" }} ({{ "{{ $labels.client }}" }}) has been down for more than 5 minutes."
+        runbook_url: "https://github.com/ethereum/ethereum-node-infrastructure/blob/main/docs/runbooks/node-down.md"
+    
+    # Sync lag alerts
+    - alert: EthereumSyncLag
+      expr: |
+        (
+          ethereum_chain_head_block - ethereum_chain_sync_block > 10
+        ) and (
+          ethereum_chain_head_block > 0
+        )
+      for: 10m
+      labels:
+        severity: warning
+        component: "{{ "{{ $labels.component }}" }}"
+        client: "{{ "{{ $labels.client }}" }}"
+      annotations:
+        summary: "Ethereum node sync lag"
+        description: "Ethereum node {{ "{{ $labels.instance }}" }} ({{ "{{ $labels.client }}" }}) is lagging behind by {{ "{{ $value }}" }} blocks for more than 10 minutes."
+        runbook_url: "https://github.com/ethereum/ethereum-node-infrastructure/blob/main/docs/runbooks/sync-lag.md"
+    
+    # High memory usage
+    - alert: EthereumNodeHighMemoryUsage
+      expr: |
+        (
+          container_memory_usage_bytes{container=~"geth|nethermind|erigon|besu|ethereum-serve"} /
+          container_spec_memory_limit_bytes{container=~"geth|nethermind|erigon|besu|ethereum-serve"} * 100
+        ) > 90
+      for: 5m
+      labels:
+        severity: warning
+        component: "{{ "{{ $labels.container }}" }}"
+      annotations:
+        summary: "High memory usage on Ethereum node"
+        description: "Ethereum node {{ "{{ $labels.pod }}" }} is using {{ "{{ $value | humanizePercentage }}" }} of its memory limit."
+        runbook_url: "https://github.com/ethereum/ethereum-node-infrastructure/blob/main/docs/runbooks/high-memory.md"
+    
+    # High CPU usage
+    - alert: EthereumNodeHighCPUUsage
+      expr: |
+        rate(container_cpu_usage_seconds_total{container=~"geth|nethermind|erigon|besu|ethereum-serve"}[5m]) * 100 > 80
+      for: 10m
+      labels:
+        severity: warning
+        component: "{{ "{{ $labels.container }}" }}"
+      annotations:
+        summary: "High CPU usage on Ethereum node"
+        description: "Ethereum node {{ "{{ $labels.pod }}" }} is using {{ "{{ $value | humanizePercentage }}" }} CPU for more than 10 minutes."
+        runbook_url: "https://github.com/ethereum/ethereum-node-infrastructure/blob/main/docs/runbooks/high-cpu.md"
+    
+    # Disk space alerts
+    - alert: EthereumNodeLowDiskSpace
+      expr: |
+        (
+          kubelet_volume_stats_available_bytes{persistentvolumeclaim=~"data-.*"} /
+          kubelet_volume_stats_capacity_bytes{persistentvolumeclaim=~"data-.*"} * 100
+        ) < 20
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Low disk space on Ethereum node"
+        description: "Ethereum node volume {{ "{{ $labels.persistentvolumeclaim }}" }} has only {{ "{{ $value | humanizePercentage }}" }} disk space remaining."
+        runbook_url: "https://github.com/ethereum/ethereum-node-infrastructure/blob/main/docs/runbooks/low-disk-space.md"
+    
+    # Critical disk space
+    - alert: EthereumNodeCriticalDiskSpace
+      expr: |
+        (
+          kubelet_volume_stats_available_bytes{persistentvolumeclaim=~"data-.*"} /
+          kubelet_volume_stats_capacity_bytes{persistentvolumeclaim=~"data-.*"} * 100
+        ) < 10
+      for: 1m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Critical disk space on Ethereum node"
+        description: "Ethereum node volume {{ "{{ $labels.persistentvolumeclaim }}" }} has only {{ "{{ $value | humanizePercentage }}" }} disk space remaining. Immediate action required."
+        runbook_url: "https://github.com/ethereum/ethereum-node-infrastructure/blob/main/docs/runbooks/critical-disk-space.md"
+    
+    # Peer connection alerts
+    - alert: EthereumNodeLowPeerCount
+      expr: ethereum_p2p_peers < 5
+      for: 15m
+      labels:
+        severity: warning
+        component: "{{ "{{ $labels.component }}" }}"
+        client: "{{ "{{ $labels.client }}" }}"
+      annotations:
+        summary: "Low peer count on Ethereum node"
+        description: "Ethereum node {{ "{{ $labels.instance }}" }} ({{ "{{ $labels.client }}" }}) has only {{ "{{ $value }}" }} peers connected for more than 15 minutes."
+        runbook_url: "https://github.com/ethereum/ethereum-node-infrastructure/blob/main/docs/runbooks/low-peer-count.md"
+    
+    # RPC endpoint health
+    - alert: EthereumRPCHighErrorRate
+      expr: |
+        (
+          rate(ethereum_rpc_requests_total{status=~"4..|5.."}[5m]) /
+          rate(ethereum_rpc_requests_total[5m])
+        ) > 0.1
+      for: 5m
+      labels:
+        severity: warning
+        component: serve-node
+      annotations:
+        summary: "High RPC error rate"
+        description: "Ethereum RPC endpoint {{ "{{ $labels.instance }}" }} has error rate of {{ "{{ $value | humanizePercentage }}" }} for more than 5 minutes."
+        runbook_url: "https://github.com/ethereum/ethereum-node-infrastructure/blob/main/docs/runbooks/high-rpc-error-rate.md"
+    
+    # Snapshot job alerts
+    - alert: EthereumSnapshotJobFailed
+      expr: |
+        increase(kube_job_status_failed{job_name=~".*snapshot.*"}[1h]) > 0
+      for: 1m
+      labels:
+        severity: warning
+        component: snapshot-job
+      annotations:
+        summary: "Ethereum snapshot job failed"
+        description: "Ethereum snapshot job {{ "{{ $labels.job_name }}" }} has failed."
+        runbook_url: "https://github.com/ethereum/ethereum-node-infrastructure/blob/main/docs/runbooks/snapshot-job-failed.md"
+    
+    # Container restart alerts
+    - alert: EthereumNodeFrequentRestarts
+      expr: |
+        increase(kube_pod_container_status_restarts_total{container=~"geth|nethermind|erigon|besu|ethereum-serve"}[1h]) > 3
+      for: 1m
+      labels:
+        severity: warning
+        component: "{{ "{{ $labels.container }}" }}"
+      annotations:
+        summary: "Frequent restarts of Ethereum node"
+        description: "Ethereum node container {{ "{{ $labels.container }}" }} in pod {{ "{{ $labels.pod }}" }} has restarted {{ "{{ $value }}" }} times in the last hour."
+        runbook_url: "https://github.com/ethereum/ethereum-node-infrastructure/blob/main/docs/runbooks/frequent-restarts.md"
+
+  # Recording rules for better performance
+  - name: ethereum-infrastructure.recording-rules
+    interval: 30s
+    rules:
+    # Block lag calculation
+    - record: ethereum:sync_lag_blocks
+      expr: |
+        ethereum_chain_head_block - ethereum_chain_sync_block
+    
+    # Sync percentage
+    - record: ethereum:sync_percentage
+      expr: |
+        (ethereum_chain_sync_block / ethereum_chain_head_block) * 100
+    
+    # Resource utilization ratios
+    - record: ethereum:memory_utilization_ratio
+      expr: |
+        container_memory_usage_bytes{container=~"geth|nethermind|erigon|besu|ethereum-serve"} /
+        container_spec_memory_limit_bytes{container=~"geth|nethermind|erigon|besu|ethereum-serve"}
+    
+    - record: ethereum:cpu_utilization_ratio
+      expr: |
+        rate(container_cpu_usage_seconds_total{container=~"geth|nethermind|erigon|besu|ethereum-serve"}[5m])
+    
+    # Disk utilization
+    - record: ethereum:disk_utilization_ratio
+      expr: |
+        1 - (
+          kubelet_volume_stats_available_bytes{persistentvolumeclaim=~"data-.*"} /
+          kubelet_volume_stats_capacity_bytes{persistentvolumeclaim=~"data-.*"}
+        )
+
+{{- if .Values.monitoring.prometheusRule.rules }}
+  # Custom rules from values
+  - name: ethereum-infrastructure.custom-rules
+    interval: 30s
+    rules:
+    {{- toYaml .Values.monitoring.prometheusRule.rules | nindent 4 }}
+{{- end }}
+{{- end }}

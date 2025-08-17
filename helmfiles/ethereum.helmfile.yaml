@@ -1,0 +1,219 @@
+# Ethereum Infrastructure Helmfile
+# Deploys the main Ethereum node infrastructure using the custom chart
+
+environments:
+  local:
+    values:
+      - ../environments/local.yaml
+  staging:
+    values:
+      - ../environments/staging.yaml
+  production:
+    values:
+      - ../environments/production.yaml
+
+---
+releases:
+  # Main Ethereum Infrastructure Deployment
+  - name: ethereum-infrastructure
+    namespace: "{{ .Values.global.namespaces.ethereum }}"
+    chart: "./charts/ethereum-infrastructure"
+    values:
+      # Global configuration
+      - global:
+          environment: "{{ .Environment.Name }}"
+          network: "{{ .Values.ethereum.network }}"
+          domain: "{{ .Values.global.domain }}"
+          imageRegistry: "{{ .Values.global.registry.url }}"
+          imagePullPolicy: "{{ .Values.global.imagePullPolicy | default \"IfNotPresent\" }}"
+          storageClass: "{{ .Values.global.storage.class }}"
+          serviceType: "{{ .Values.global.serviceType | default \"ClusterIP\" }}"
+          securityContext: "{{ .Values.global.securityContext }}"
+          namespaces: "{{ .Values.global.namespaces }}"
+
+      # Ethereum network configuration
+      - ethereum:
+          network: "{{ .Values.ethereum.network }}"
+          genesis: "{{ .Values.ethereum.genesis | default \"\" }}"
+          bootnodes: "{{ .Values.ethereum.bootnodes }}"
+
+      # Sync nodes configuration
+      - syncNodes:
+          enabled: "{{ .Values.ethereum.syncNodes.enabled }}"
+          clients: "{{ .Values.ethereum.clients }}"
+          service:
+            type: ClusterIP
+            ports:
+              rpc: 8545
+              ws: 8546
+              metrics: 6060
+          podAnnotations:
+            prometheus.io/scrape: "true"
+            prometheus.io/port: "6060"
+            prometheus.io/path: "/debug/metrics/prometheus"
+          antiAffinity: "{{ .Values.ethereum.syncNodes.antiAffinity | default dict }}"
+
+      # Serve nodes configuration
+      - serveNodes:
+          enabled: "{{ .Values.ethereum.serveNodes.enabled }}"
+          replicas: "{{ .Values.ethereum.serveNodes.replicas }}"
+          image:
+            repository: "ethereum/geth"
+            tag: "stable"
+          deltaSync:
+            enabled: true
+            image:
+              repository: "ethereum/delta-sync"
+              tag: "latest"
+            resources: "{{ .Values.ethereum.serveNodes.resources }}"
+          args:
+            - "--{{ .Values.ethereum.network }}"
+            - "--datadir=/data"
+            - "--http"
+            - "--http.addr=0.0.0.0"
+            - "--http.port=8545"
+            - "--http.api=eth,net,web3"
+            - "--http.corsdomain=*"
+            - "--http.vhosts=*"
+            - "--metrics"
+            - "--metrics.addr=0.0.0.0"
+            - "--metrics.port=6060"
+            - "--syncmode=snap"
+            - "--maxpeers=25"
+          resources: "{{ .Values.ethereum.serveNodes.resources }}"
+          storage:
+            size: "{{ .Values.ethereum.serveNodes.storage.size | default \"50Gi\" }}"
+          autoscaling: "{{ .Values.ethereum.serveNodes.autoscaling }}"
+          service:
+            type: ClusterIP
+            port: 8545
+            targetPort: 8545
+          podAnnotations:
+            prometheus.io/scrape: "true"
+            prometheus.io/port: "6060"
+            prometheus.io/path: "/debug/metrics/prometheus"
+            sidecar.istio.io/inject: "true"
+          probes:
+            readiness:
+              enabled: true
+              initialDelaySeconds: 30
+              periodSeconds: 10
+              timeoutSeconds: 5
+              failureThreshold: 3
+              httpGet:
+                path: /health
+                port: 8545
+            liveness:
+              enabled: true
+              initialDelaySeconds: 60
+              periodSeconds: 30
+              timeoutSeconds: 10
+              failureThreshold: 3
+              httpGet:
+                path: /health
+                port: 8545
+
+      # Snapshot jobs configuration
+      - snapshotJobs: "{{ .Values.ethereum.snapshotJobs }}"
+
+      # Monitoring configuration
+      - monitoring:
+          enabled: true
+          serviceMonitor:
+            enabled: true
+            namespace: "{{ .Values.global.namespaces.observability }}"
+            labels:
+              app: ethereum-infrastructure
+            interval: 30s
+            scrapeTimeout: 10s
+            path: /debug/metrics/prometheus
+          prometheusRule:
+            enabled: true
+            namespace: "{{ .Values.global.namespaces.observability }}"
+            labels:
+              app: ethereum-infrastructure
+
+      # Network policy configuration
+      - networkPolicy:
+          enabled: "{{ .Values.infrastructure.networkPolicies.enabled | default false }}"
+          ingress: "{{ .Values.networkPolicy.ingress | default list }}"
+
+      # Istio service mesh configuration
+      - istio:
+          enabled: "{{ .Values.istio.enabled }}"
+          virtualService:
+            enabled: true
+            hosts:
+              - "rpc.{{ .Values.global.domain }}"
+            gateways:
+              - ethereum-gateway
+            http:
+              - match:
+                  - uri:
+                      prefix: "/"
+                route:
+                  - destination:
+                      host: ethereum-serve-nodes
+                      port:
+                        number: 8545
+                fault:
+                  delay:
+                    percentage:
+                      value: "{{ eq .Environment.Name \"local\" | ternary \"0\" \"0.1\" }}"
+                    fixedDelay: 5s
+                retries:
+                  attempts: 3
+                  perTryTimeout: 30s
+                timeout: 60s
+          destinationRule:
+            enabled: true
+            host: ethereum-serve-nodes
+            trafficPolicy:
+              connectionPool:
+                tcp:
+                  maxConnections: 100
+                http:
+                  http1MaxPendingRequests: 50
+                  maxRequestsPerConnection: 2
+              loadBalancer:
+                simple: LEAST_CONN
+              outlierDetection:
+                consecutiveErrors: 3
+                interval: 30s
+                baseEjectionTime: 30s
+                maxEjectionPercent: 50
+
+      # RBAC configuration
+      - rbac:
+          create: true
+          serviceAccountName: "ethereum-infrastructure"
+          rules:
+            - apiGroups: [""]
+              resources: ["pods"]
+              verbs: ["get", "list", "create", "delete"]
+            - apiGroups: ["batch"]
+              resources: ["jobs", "cronjobs"]
+              verbs: ["get", "list", "create", "delete", "patch"]
+
+      # Common labels
+      - commonLabels:
+          app.kubernetes.io/name: ethereum-infrastructure
+          app.kubernetes.io/instance: "{{ .Release.Name }}"
+          app.kubernetes.io/version: "{{ .Chart.AppVersion }}"
+          app.kubernetes.io/managed-by: "{{ .Release.Service }}"
+          app.kubernetes.io/part-of: ethereum-infrastructure
+          environment: "{{ .Environment.Name }}"
+          network: "{{ .Values.ethereum.network }}"
+
+      # Node scheduling
+      - nodeSelector: "{{ .Values.nodeSelector | default dict }}"
+      - tolerations: "{{ .Values.tolerations | default list }}"
+      - affinity: "{{ .Values.affinity | default dict }}"
+
+helmDefaults:
+  createNamespace: true
+  wait: true
+  timeout: 900
+  atomic: true
+  cleanupOnFail: true
+  force: false

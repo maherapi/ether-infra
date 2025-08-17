@@ -1,0 +1,169 @@
+# Local Ethereum Configuration
+# Specific values for local development Ethereum infrastructure
+
+# Global overrides for local development
+global:
+  imageRegistry: "localhost:5000"
+  imagePullPolicy: "IfNotPresent"
+
+# Ethereum network configuration
+ethereum:
+  network: "sepolia"
+  
+  # Sync nodes configuration - minimal for local
+  syncNodes:
+    enabled: true
+    antiAffinity:
+      enabled: false  # Disable anti-affinity for local single-node cluster
+  
+  # Serve nodes configuration
+  serveNodes:
+    enabled: true
+    replicas: 1
+    autoscaling:
+      enabled: false  # Disable HPA for local
+      minReplicas: 1
+      maxReplicas: 1
+    resources:
+      limits:
+        cpu: "500m"
+        memory: "1Gi"
+      requests:
+        cpu: "100m"
+        memory: "256Mi"
+    storage:
+      size: "10Gi"  # Smaller storage for local
+  
+  # Snapshot jobs configuration
+  snapshotJobs:
+    enabled: true
+    create:
+      schedule: "0 */6 * * *"  # Every 6 hours for local testing
+      retention: 2  # Keep only 2 snapshots locally
+      resources:
+        limits:
+          cpu: "200m"
+          memory: "512Mi"
+    cleanup:
+      enabled: true
+      schedule: "0 4 * * *"  # Daily cleanup
+
+  # Client configuration - only enable Geth for local
+  clients:
+    geth:
+      enabled: true
+      replicas: 1
+      resources:
+        limits:
+          cpu: "1"
+          memory: "2Gi"
+        requests:
+          cpu: "200m"
+          memory: "512Mi"
+      storage:
+        size: "20Gi"
+      args:
+        - "--sepolia"
+        - "--datadir=/data"
+        - "--http"
+        - "--http.addr=0.0.0.0"
+        - "--http.port=8545"
+        - "--http.api=eth,net,web3,debug"
+        - "--http.corsdomain=*"
+        - "--http.vhosts=*"
+        - "--ws"
+        - "--ws.addr=0.0.0.0"
+        - "--ws.port=8546"
+        - "--ws.api=eth,net,web3"
+        - "--ws.origins=*"
+        - "--metrics"
+        - "--metrics.addr=0.0.0.0"
+        - "--metrics.port=6060"
+        - "--syncmode=snap"
+        - "--maxpeers=25"
+        - "--cache=512"
+        - "--verbosity=3"
+    
+    nethermind:
+      enabled: false
+    
+    erigon:
+      enabled: false
+    
+    besu:
+      enabled: false
+
+# Monitoring configuration for local
+monitoring:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+    interval: 60s  # Less frequent scraping for local
+    scrapeTimeout: 30s
+  
+  prometheusRule:
+    enabled: true
+    # More relaxed alerts for local development
+    rules:
+      - alert: EthereumNodeDown
+        expr: up{job="ethereum-nodes"} == 0
+        for: 10m  # Longer grace period for local
+        labels:
+          severity: warning  # Lower severity for local
+        annotations:
+          summary: "Ethereum node is down (local)"
+          description: "Local Ethereum node {{ $labels.instance }} has been down for more than 10 minutes."
+
+# Network policy - disabled for local
+networkPolicy:
+  enabled: false
+
+# Istio configuration - simplified for local
+istio:
+  enabled: true
+  virtualService:
+    enabled: true
+    hosts:
+      - "rpc.local.ethereum.dev"
+      - "localhost"
+    http:
+      - match:
+          - uri:
+              prefix: "/"
+        route:
+          - destination:
+              host: ethereum-infrastructure-serve
+              port:
+                number: 8545
+        timeout: 30s
+        retries:
+          attempts: 2
+          perTryTimeout: 10s
+  
+  destinationRule:
+    enabled: true
+    trafficPolicy:
+      connectionPool:
+        tcp:
+          maxConnections: 10  # Lower limits for local
+        http:
+          http1MaxPendingRequests: 5
+          maxRequestsPerConnection: 1
+      loadBalancer:
+        simple: ROUND_ROBIN  # Simple load balancing for local
+
+# RBAC - minimal for local
+rbac:
+  create: true
+  rules:
+    - apiGroups: [""]
+      resources: ["pods", "services"]
+      verbs: ["get", "list"]
+    - apiGroups: ["batch"]
+      resources: ["jobs"]
+      verbs: ["get", "list", "create"]
+
+# Resource constraints for local development
+nodeSelector: {}
+tolerations: []
+affinity: {}

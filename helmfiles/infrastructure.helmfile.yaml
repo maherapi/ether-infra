@@ -1,0 +1,120 @@
+# Infrastructure Helmfile - Core Kubernetes infrastructure components
+# Deploys storage classes, network policies, RBAC, and persistent volumes
+
+environments:
+  local:
+    values:
+      - ../environments/local.yaml
+  staging:
+    values:
+      - ../environments/staging.yaml
+  production:
+    values:
+      - ../environments/production.yaml
+
+---
+releases:
+  # Local Path Provisioner for local development
+  - name: local-path-provisioner
+    condition: "{{ eq .Environment.Name \"local\" }}"
+    namespace: "{{ .Values.global.namespaces.infrastructure }}"
+    chart: "rancher/local-path-provisioner"
+    version: "0.0.24"
+    values:
+      - nodePathMap:
+          - node: DEFAULT_PATH_FOR_NON_LISTED_NODES
+            paths:
+              - /opt/local-path-provisioner
+      - storageClass:
+          name: local-path
+          create: true
+          defaultClass: true
+      - resources:
+          limits:
+            cpu: 100m
+            memory: 128Mi
+          requests:
+            cpu: 10m
+            memory: 32Mi
+
+  # Storage Classes Configuration
+  - name: storage-classes
+    namespace: "{{ .Values.global.namespaces.infrastructure }}"
+    chart: "./charts/storage-classes"
+    values:
+      - storageClasses: "{{ .Values.infrastructure.storageClasses }}"
+      - environment: "{{ .Environment.Name }}"
+
+  # Network Policies
+  - name: network-policies
+    condition: "{{ .Values.infrastructure.networkPolicies.enabled }}"
+    namespace: "{{ .Values.global.namespaces.infrastructure }}"
+    chart: "./charts/network-policies"
+    values:
+      - networkPolicies:
+          enabled: "{{ .Values.infrastructure.networkPolicies.enabled }}"
+          strict: "{{ .Values.infrastructure.networkPolicies.strict | default false }}"
+          namespaces:
+            ethereum: "{{ .Values.global.namespaces.ethereum }}"
+            observability: "{{ .Values.global.namespaces.observability }}"
+            registry: "{{ .Values.global.namespaces.registry }}"
+            istio: "{{ .Values.global.namespaces.istio }}"
+
+  # RBAC Configuration
+  - name: rbac
+    condition: "{{ .Values.infrastructure.rbac.enabled }}"
+    namespace: "{{ .Values.global.namespaces.infrastructure }}"
+    chart: "./charts/rbac"
+    values:
+      - rbac:
+          enabled: "{{ .Values.infrastructure.rbac.enabled }}"
+          restrictive: "{{ .Values.infrastructure.rbac.restrictive }}"
+          serviceAccounts:
+            ethereum:
+              namespace: "{{ .Values.global.namespaces.ethereum }}"
+              permissions:
+                - apiGroups: [""]
+                  resources: ["pods", "services", "endpoints"]
+                  verbs: ["get", "list", "watch"]
+                - apiGroups: ["apps"]
+                  resources: ["deployments", "statefulsets"]
+                  verbs: ["get", "list", "watch", "patch"]
+            snapshots:
+              namespace: "{{ .Values.global.namespaces.ethereum }}"
+              permissions:
+                - apiGroups: [""]
+                  resources: ["pods"]
+                  verbs: ["create", "delete", "get", "list"]
+                - apiGroups: ["batch"]
+                  resources: ["jobs", "cronjobs"]
+                  verbs: ["create", "delete", "get", "list", "patch"]
+            registry:
+              namespace: "{{ .Values.global.namespaces.registry }}"
+              permissions:
+                - apiGroups: [""]
+                  resources: ["pods", "services", "secrets"]
+                  verbs: ["get", "list", "watch"]
+
+  # Pod Security Standards (for production)
+  - name: pod-security
+    condition: "{{ .Values.infrastructure.podSecurity.enabled | default false }}"
+    namespace: "{{ .Values.global.namespaces.infrastructure }}"
+    chart: "./charts/pod-security"
+    values:
+      - podSecurity:
+          standard: "{{ .Values.infrastructure.podSecurity.standard | default \"restricted\" }}"
+          namespaces:
+            - "{{ .Values.global.namespaces.ethereum }}"
+            - "{{ .Values.global.namespaces.observability }}"
+            - "{{ .Values.global.namespaces.registry }}"
+
+repositories:
+  - name: rancher
+    url: https://charts.rancher.io
+
+helmDefaults:
+  createNamespace: true
+  wait: true
+  timeout: 300
+  atomic: true
+  cleanupOnFail: true

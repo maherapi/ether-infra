@@ -1,0 +1,384 @@
+# Ethereum Infrastructure Alert Rules
+# Comprehensive alerting for Ethereum node infrastructure
+
+groups:
+  - name: ethereum.node.health
+    interval: 30s
+    rules:
+      # Node availability alerts
+      - alert: EthereumNodeDown
+        expr: up{job="ethereum-nodes"} == 0
+        for: 5m
+        labels:
+          severity: critical
+          service: ethereum
+          component: "{{ $labels.component }}"
+          client: "{{ $labels.client }}"
+        annotations:
+          summary: "Ethereum node is down"
+          description: |
+            Ethereum node {{ $labels.instance }} ({{ $labels.client }}/{{ $labels.component }}) 
+            has been down for more than 5 minutes.
+            
+            Troubleshooting steps:
+            1. Check pod status: kubectl get pods -n {{ $labels.namespace }} -l app.kubernetes.io/component={{ $labels.component }}
+            2. Check pod logs: kubectl logs -n {{ $labels.namespace }} {{ $labels.pod }}
+            3. Check node resources: kubectl describe node {{ $labels.node }}
+          runbook_url: "https://github.com/ethereum/ethereum-node-infrastructure/blob/main/docs/runbooks/node-down.md"
+
+      - alert: EthereumNodeRestarting
+        expr: increase(kube_pod_container_status_restarts_total{container=~"geth|nethermind|erigon|besu|ethereum-serve"}[1h]) > 3
+        for: 1m
+        labels:
+          severity: warning
+          service: ethereum
+          component: "{{ $labels.container }}"
+        annotations:
+          summary: "Ethereum node restarting frequently"
+          description: |
+            Ethereum node container {{ $labels.container }} in pod {{ $labels.pod }} 
+            has restarted {{ $value }} times in the last hour.
+            
+            This may indicate:
+            - Memory issues (OOMKilled)
+            - Configuration problems
+            - Persistent storage issues
+            - Network connectivity problems
+          runbook_url: "https://github.com/ethereum/ethereum-node-infrastructure/blob/main/docs/runbooks/frequent-restarts.md"
+
+  - name: ethereum.sync.health
+    interval: 30s
+    rules:
+      # Sync lag alerts
+      - alert: EthereumSyncLagWarning
+        expr: |
+          (
+            ethereum_chain_head_block - ethereum_chain_sync_block > 10
+          ) and (
+            ethereum_chain_head_block > 0
+          )
+        for: 10m
+        labels:
+          severity: warning
+          service: ethereum
+          component: "{{ $labels.component }}"
+          client: "{{ $labels.client }}"
+        annotations:
+          summary: "Ethereum node sync lag detected"
+          description: |
+            Ethereum node {{ $labels.instance }} ({{ $labels.client }}) is lagging behind 
+            by {{ $value }} blocks for more than 10 minutes.
+            
+            Current block: {{ $labels.ethereum_chain_sync_block }}
+            Target block: {{ $labels.ethereum_chain_head_block }}
+            
+            This may indicate:
+            - Network connectivity issues
+            - Insufficient resources
+            - Peer connectivity problems
+          runbook_url: "https://github.com/ethereum/ethereum-node-infrastructure/blob/main/docs/runbooks/sync-lag.md"
+
+      - alert: EthereumSyncLagCritical
+        expr: |
+          (
+            ethereum_chain_head_block - ethereum_chain_sync_block > 100
+          ) and (
+            ethereum_chain_head_block > 0
+          )
+        for: 30m
+        labels:
+          severity: critical
+          service: ethereum
+          component: "{{ $labels.component }}"
+          client: "{{ $labels.client }}"
+        annotations:
+          summary: "Ethereum node severely behind sync"
+          description: |
+            Ethereum node {{ $labels.instance }} ({{ $labels.client }}) is severely behind 
+            by {{ $value }} blocks for more than 30 minutes.
+            
+            This requires immediate attention as it may affect service availability.
+          runbook_url: "https://github.com/ethereum/ethereum-node-infrastructure/blob/main/docs/runbooks/sync-lag.md"
+
+      - alert: EthereumSyncStalled
+        expr: |
+          (
+            rate(ethereum_chain_sync_block[10m]) == 0
+          ) and (
+            ethereum_chain_sync_block > 0
+          )
+        for: 15m
+        labels:
+          severity: critical
+          service: ethereum
+          component: "{{ $labels.component }}"
+          client: "{{ $labels.client }}"
+        annotations:
+          summary: "Ethereum node sync has stalled"
+          description: |
+            Ethereum node {{ $labels.instance }} ({{ $labels.client }}) sync has stalled.
+            No new blocks have been synced in the last 15 minutes.
+            
+            Block number: {{ $labels.ethereum_chain_sync_block }}
+          runbook_url: "https://github.com/ethereum/ethereum-node-infrastructure/blob/main/docs/runbooks/sync-stalled.md"
+
+  - name: ethereum.resource.usage
+    interval: 30s
+    rules:
+      # Memory usage alerts
+      - alert: EthereumNodeHighMemoryUsage
+        expr: |
+          (
+            container_memory_usage_bytes{container=~"geth|nethermind|erigon|besu|ethereum-serve"} /
+            container_spec_memory_limit_bytes{container=~"geth|nethermind|erigon|besu|ethereum-serve"} * 100
+          ) > 85
+        for: 5m
+        labels:
+          severity: warning
+          service: ethereum
+          component: "{{ $labels.container }}"
+        annotations:
+          summary: "High memory usage on Ethereum node"
+          description: |
+            Ethereum node {{ $labels.pod }} is using {{ $value | humanizePercentage }} of its memory limit.
+            
+            Current usage: {{ $labels.container_memory_usage_bytes | humanizeBytes }}
+            Memory limit: {{ $labels.container_spec_memory_limit_bytes | humanizeBytes }}
+          runbook_url: "https://github.com/ethereum/ethereum-node-infrastructure/blob/main/docs/runbooks/high-memory.md"
+
+      - alert: EthereumNodeCriticalMemoryUsage
+        expr: |
+          (
+            container_memory_usage_bytes{container=~"geth|nethermind|erigon|besu|ethereum-serve"} /
+            container_spec_memory_limit_bytes{container=~"geth|nethermind|erigon|besu|ethereum-serve"} * 100
+          ) > 95
+        for: 2m
+        labels:
+          severity: critical
+          service: ethereum
+          component: "{{ $labels.container }}"
+        annotations:
+          summary: "Critical memory usage on Ethereum node"
+          description: |
+            Ethereum node {{ $labels.pod }} is using {{ $value | humanizePercentage }} of its memory limit.
+            Pod may be killed by OOMKiller soon.
+          runbook_url: "https://github.com/ethereum/ethereum-node-infrastructure/blob/main/docs/runbooks/critical-memory.md"
+
+      # CPU usage alerts
+      - alert: EthereumNodeHighCPUUsage
+        expr: |
+          rate(container_cpu_usage_seconds_total{container=~"geth|nethermind|erigon|besu|ethereum-serve"}[5m]) * 100 > 80
+        for: 10m
+        labels:
+          severity: warning
+          service: ethereum
+          component: "{{ $labels.container }}"
+        annotations:
+          summary: "High CPU usage on Ethereum node"
+          description: |
+            Ethereum node {{ $labels.pod }} is using {{ $value | humanizePercentage }} CPU 
+            for more than 10 minutes.
+          runbook_url: "https://github.com/ethereum/ethereum-node-infrastructure/blob/main/docs/runbooks/high-cpu.md"
+
+  - name: ethereum.storage.usage
+    interval: 30s
+    rules:
+      # Disk space alerts
+      - alert: EthereumNodeLowDiskSpace
+        expr: |
+          (
+            kubelet_volume_stats_available_bytes{persistentvolumeclaim=~"data-.*ethereum.*"} /
+            kubelet_volume_stats_capacity_bytes{persistentvolumeclaim=~"data-.*ethereum.*"} * 100
+          ) < 20
+        for: 5m
+        labels:
+          severity: warning
+          service: ethereum
+          component: storage
+        annotations:
+          summary: "Low disk space on Ethereum node"
+          description: |
+            Ethereum node volume {{ $labels.persistentvolumeclaim }} has only {{ $value | humanizePercentage }} 
+            disk space remaining.
+            
+            Available: {{ $labels.kubelet_volume_stats_available_bytes | humanizeBytes }}
+            Total: {{ $labels.kubelet_volume_stats_capacity_bytes | humanizeBytes }}
+          runbook_url: "https://github.com/ethereum/ethereum-node-infrastructure/blob/main/docs/runbooks/low-disk-space.md"
+
+      - alert: EthereumNodeCriticalDiskSpace
+        expr: |
+          (
+            kubelet_volume_stats_available_bytes{persistentvolumeclaim=~"data-.*ethereum.*"} /
+            kubelet_volume_stats_capacity_bytes{persistentvolumeclaim=~"data-.*ethereum.*"} * 100
+          ) < 10
+        for: 1m
+        labels:
+          severity: critical
+          service: ethereum
+          component: storage
+        annotations:
+          summary: "Critical disk space on Ethereum node"
+          description: |
+            Ethereum node volume {{ $labels.persistentvolumeclaim }} has only {{ $value | humanizePercentage }} 
+            disk space remaining. Immediate action required.
+            
+            Node may stop syncing or become unavailable soon.
+          runbook_url: "https://github.com/ethereum/ethereum-node-infrastructure/blob/main/docs/runbooks/critical-disk-space.md"
+
+  - name: ethereum.network.connectivity
+    interval: 30s
+    rules:
+      # Peer connectivity alerts
+      - alert: EthereumNodeLowPeerCount
+        expr: ethereum_p2p_peers < 5
+        for: 15m
+        labels:
+          severity: warning
+          service: ethereum
+          component: "{{ $labels.component }}"
+          client: "{{ $labels.client }}"
+        annotations:
+          summary: "Low peer count on Ethereum node"
+          description: |
+            Ethereum node {{ $labels.instance }} ({{ $labels.client }}) has only {{ $value }} 
+            peers connected for more than 15 minutes.
+            
+            This may indicate:
+            - Network connectivity issues
+            - Firewall blocking P2P traffic
+            - Node is behind NAT without proper configuration
+          runbook_url: "https://github.com/ethereum/ethereum-node-infrastructure/blob/main/docs/runbooks/low-peer-count.md"
+
+      - alert: EthereumNodeNoPeers
+        expr: ethereum_p2p_peers == 0
+        for: 5m
+        labels:
+          severity: critical
+          service: ethereum
+          component: "{{ $labels.component }}"
+          client: "{{ $labels.client }}"
+        annotations:
+          summary: "Ethereum node has no peers"
+          description: |
+            Ethereum node {{ $labels.instance }} ({{ $labels.client }}) has no peers connected.
+            Node is isolated from the network.
+          runbook_url: "https://github.com/ethereum/ethereum-node-infrastructure/blob/main/docs/runbooks/no-peers.md"
+
+  - name: ethereum.rpc.health
+    interval: 30s
+    rules:
+      # RPC endpoint health
+      - alert: EthereumRPCHighErrorRate
+        expr: |
+          (
+            rate(ethereum_rpc_requests_total{status=~"4..|5.."}[5m]) /
+            rate(ethereum_rpc_requests_total[5m])
+          ) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          service: ethereum
+          component: rpc
+        annotations:
+          summary: "High RPC error rate"
+          description: |
+            Ethereum RPC endpoint {{ $labels.instance }} has error rate of {{ $value | humanizePercentage }} 
+            for more than 5 minutes.
+            
+            This may indicate:
+            - Node sync issues
+            - Resource constraints
+            - Invalid requests from clients
+          runbook_url: "https://github.com/ethereum/ethereum-node-infrastructure/blob/main/docs/runbooks/high-rpc-error-rate.md"
+
+      - alert: EthereumRPCHighLatency
+        expr: |
+          histogram_quantile(0.95, rate(ethereum_rpc_request_duration_seconds_bucket[5m])) > 5
+        for: 5m
+        labels:
+          severity: warning
+          service: ethereum
+          component: rpc
+        annotations:
+          summary: "High RPC request latency"
+          description: |
+            Ethereum RPC endpoint {{ $labels.instance }} has 95th percentile latency of {{ $value }}s 
+            for more than 5 minutes.
+          runbook_url: "https://github.com/ethereum/ethereum-node-infrastructure/blob/main/docs/runbooks/high-rpc-latency.md"
+
+  - name: ethereum.snapshot.jobs
+    interval: 60s
+    rules:
+      # Snapshot job health
+      - alert: EthereumSnapshotJobFailed
+        expr: |
+          increase(kube_job_status_failed{job_name=~".*snapshot.*"}[1h]) > 0
+        for: 1m
+        labels:
+          severity: warning
+          service: ethereum
+          component: snapshot
+        annotations:
+          summary: "Ethereum snapshot job failed"
+          description: |
+            Ethereum snapshot job {{ $labels.job_name }} has failed.
+            
+            Check job logs: kubectl logs -n {{ $labels.namespace }} job/{{ $labels.job_name }}
+          runbook_url: "https://github.com/ethereum/ethereum-node-infrastructure/blob/main/docs/runbooks/snapshot-job-failed.md"
+
+      - alert: EthereumSnapshotJobMissing
+        expr: |
+          (time() - kube_job_status_completion_time{job_name=~".*snapshot-create.*"}) > 86400
+        for: 1h
+        labels:
+          severity: warning
+          service: ethereum
+          component: snapshot
+        annotations:
+          summary: "Ethereum snapshot job has not run recently"
+          description: |
+            Ethereum snapshot creation job has not completed successfully in the last 24 hours.
+            
+            Last completion: {{ $labels.kube_job_status_completion_time | humanizeTimestamp }}
+          runbook_url: "https://github.com/ethereum/ethereum-node-infrastructure/blob/main/docs/runbooks/snapshot-job-missing.md"
+
+  - name: ethereum.autoscaling
+    interval: 30s
+    rules:
+      # HPA alerts
+      - alert: EthereumHPAMaxReplicas
+        expr: |
+          kube_horizontalpodautoscaler_status_current_replicas{horizontalpodautoscaler=~".*ethereum.*"} >= 
+          kube_horizontalpodautoscaler_spec_max_replicas{horizontalpodautoscaler=~".*ethereum.*"}
+        for: 10m
+        labels:
+          severity: warning
+          service: ethereum
+          component: autoscaling
+        annotations:
+          summary: "Ethereum HPA at maximum replicas"
+          description: |
+            Ethereum HPA {{ $labels.horizontalpodautoscaler }} has been at maximum replicas 
+            ({{ $value }}) for more than 10 minutes.
+            
+            Consider:
+            - Increasing max replicas
+            - Investigating high load causes
+            - Optimizing application performance
+          runbook_url: "https://github.com/ethereum/ethereum-node-infrastructure/blob/main/docs/runbooks/hpa-max-replicas.md"
+
+      - alert: EthereumHPAUnableToScale
+        expr: |
+          kube_horizontalpodautoscaler_status_condition{condition="AbleToScale", status="false"} == 1
+        for: 5m
+        labels:
+          severity: critical
+          service: ethereum
+          component: autoscaling
+        annotations:
+          summary: "Ethereum HPA unable to scale"
+          description: |
+            Ethereum HPA {{ $labels.horizontalpodautoscaler }} is unable to scale.
+            
+            Check HPA conditions: kubectl describe hpa {{ $labels.horizontalpodautoscaler }} -n {{ $labels.namespace }}
+          runbook_url: "https://github.com/ethereum/ethereum-node-infrastructure/blob/main/docs/runbooks/hpa-unable-to-scale.md"

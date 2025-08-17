@@ -1,0 +1,468 @@
+# Default values for ethereum-infrastructure
+# This is a YAML-formatted file.
+
+global:
+  # Global configuration
+  environment: "local"
+  network: "sepolia"
+  domain: "ethereum.local"
+  
+  # Image configuration
+  imageRegistry: "localhost:5000"
+  imagePullPolicy: IfNotPresent
+  imagePullSecrets: []
+  
+  # Storage configuration
+  storageClass: "local-path"
+  
+  # Network configuration
+  serviceType: ClusterIP
+  
+  # Security context
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+
+# Ethereum network configuration
+ethereum:
+  network: "sepolia"  # mainnet, sepolia, goerli
+  genesis: ""  # Custom genesis file (optional)
+  
+  # Bootnodes for network discovery
+  bootnodes:
+    sepolia:
+      - "enode://4e5e92199ee224a01932a377160aa432f31d0b351f84ab413a8e0a42f4f36476f8fb1cbe914af0d9aef0d51665c214cf653c651c4bbd9d5550a934f241f1682b@138.197.51.181:30303"
+      - "enode://143e11fb766781d22d92a2e33f8f104cddae4411a122295ed6c6264db00ccb65f0c7b18bcfc7c4b3db2c1b93c7a0db13c78ff1e3b57fcb1a24e2a5e4b7b11cd31@146.190.13.128:30303"
+    mainnet:
+      - "enode://d860a01f9722d78051619d1e2351aba3f43f943f6f00718d1b9baa4101932a1f5011f16bb2b1bb35db20d6fe28fa0bf09636d26a87d31de9ec6203eeedb1f666@18.138.108.67:30303"
+      - "enode://22a8232c3abc76a16ae9d6c3b164f98775fe226f0917b0ca871128a74a8e9630b458460865bab457221f1d448dd9791d24c4e5d88786180ac185df813a68d4de@3.209.45.79:30303"
+
+# Sync nodes configuration (StatefulSets for blockchain synchronization)
+syncNodes:
+  enabled: true
+  
+  # Clients configuration
+  clients:
+    geth:
+      enabled: true
+      replicas: 1
+      image:
+        repository: "ethereum/client-go"
+        tag: "stable"
+      args:
+        - "--sepolia"
+        - "--datadir=/data"
+        - "--http"
+        - "--http.addr=0.0.0.0"
+        - "--http.port=8545"
+        - "--http.api=eth,net,web3"
+        - "--http.corsdomain=*"
+        - "--http.vhosts=*"
+        - "--ws"
+        - "--ws.addr=0.0.0.0"
+        - "--ws.port=8546"
+        - "--ws.api=eth,net,web3"
+        - "--ws.origins=*"
+        - "--metrics"
+        - "--metrics.addr=0.0.0.0"
+        - "--metrics.port=6060"
+        - "--pprof"
+        - "--pprof.addr=0.0.0.0"
+        - "--pprof.port=6061"
+      resources:
+        limits:
+          cpu: "2"
+          memory: "4Gi"
+        requests:
+          cpu: "500m"
+          memory: "1Gi"
+      storage:
+        size: "100Gi"
+        storageClass: ""  # Use global default
+      
+    nethermind:
+      enabled: false
+      replicas: 1
+      image:
+        repository: "nethermind/nethermind"
+        tag: "latest"
+      args:
+        - "--config=sepolia"
+        - "--datadir=/data"
+        - "--JsonRpc.Enabled=true"
+        - "--JsonRpc.Host=0.0.0.0"
+        - "--JsonRpc.Port=8545"
+        - "--Metrics.Enabled=true"
+        - "--Metrics.ExposePort=6060"
+      resources:
+        limits:
+          cpu: "2"
+          memory: "4Gi"
+        requests:
+          cpu: "500m"
+          memory: "1Gi"
+      storage:
+        size: "100Gi"
+        storageClass: ""
+    
+    erigon:
+      enabled: false
+      replicas: 1
+      image:
+        repository: "thorax/erigon"
+        tag: "latest"
+      args:
+        - "--chain=sepolia"
+        - "--datadir=/data"
+        - "--http.addr=0.0.0.0"
+        - "--http.port=8545"
+        - "--http.api=eth,debug,net,trace,web3,erigon"
+        - "--http.corsdomain=*"
+        - "--http.vhosts=*"
+        - "--metrics"
+        - "--metrics.addr=0.0.0.0"
+        - "--metrics.port=6060"
+      resources:
+        limits:
+          cpu: "2"
+          memory: "4Gi"
+        requests:
+          cpu: "500m"
+          memory: "1Gi"
+      storage:
+        size: "80Gi"  # Erigon is more storage efficient
+        storageClass: ""
+    
+    besu:
+      enabled: false
+      replicas: 1
+      image:
+        repository: "hyperledger/besu"
+        tag: "latest"
+      args:
+        - "--network=sepolia"
+        - "--data-path=/data"
+        - "--rpc-http-enabled=true"
+        - "--rpc-http-host=0.0.0.0"
+        - "--rpc-http-port=8545"
+        - "--rpc-http-api=ETH,NET,WEB3"
+        - "--rpc-http-cors-origins=*"
+        - "--rpc-ws-enabled=true"
+        - "--rpc-ws-host=0.0.0.0"
+        - "--rpc-ws-port=8546"
+        - "--metrics-enabled=true"
+        - "--metrics-host=0.0.0.0"
+        - "--metrics-port=9545"
+      resources:
+        limits:
+          cpu: "2"
+          memory: "4Gi"
+        requests:
+          cpu: "500m"
+          memory: "1Gi"
+      storage:
+        size: "100Gi"
+        storageClass: ""
+
+  # Pod configuration
+  podAnnotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "6060"
+    prometheus.io/path: "/debug/metrics/prometheus"
+  
+  # Service configuration
+  service:
+    type: ClusterIP
+    ports:
+      rpc: 8545
+      ws: 8546
+      metrics: 6060
+  
+  # Affinity and topology
+  antiAffinity:
+    enabled: true
+    type: "preferred"  # preferred or required
+
+# Serve nodes configuration (Deployments for RPC serving)
+serveNodes:
+  enabled: true
+  replicas: 2
+  
+  # Image configuration
+  image:
+    repository: "ethereum/serve-node"
+    tag: "latest"
+  
+  # Delta sync configuration (init container)
+  deltaSync:
+    enabled: true
+    image:
+      repository: "ethereum/delta-sync"
+      tag: "latest"
+    resources:
+      limits:
+        cpu: "1"
+        memory: "2Gi"
+      requests:
+        cpu: "200m"
+        memory: "512Mi"
+  
+  # Container configuration
+  args:
+    - "--sepolia"
+    - "--datadir=/data"
+    - "--http"
+    - "--http.addr=0.0.0.0"
+    - "--http.port=8545"
+    - "--http.api=eth,net,web3"
+    - "--http.corsdomain=*"
+    - "--http.vhosts=*"
+    - "--metrics"
+    - "--metrics.addr=0.0.0.0"
+    - "--metrics.port=6060"
+    - "--syncmode=snap"
+    - "--maxpeers=25"
+  
+  # Resources
+  resources:
+    limits:
+      cpu: "1"
+      memory: "2Gi"
+    requests:
+      cpu: "200m"
+      memory: "512Mi"
+  
+  # Storage (ephemeral for serve nodes)
+  storage:
+    size: "50Gi"
+    storageClass: ""
+  
+  # Autoscaling
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+  
+  # Service configuration
+  service:
+    type: ClusterIP
+    port: 8545
+    targetPort: 8545
+    annotations: {}
+  
+  # Pod configuration
+  podAnnotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "6060"
+    prometheus.io/path: "/debug/metrics/prometheus"
+    sidecar.istio.io/inject: "true"
+  
+  # Readiness and liveness probes
+  probes:
+    readiness:
+      enabled: true
+      initialDelaySeconds: 30
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 3
+      httpGet:
+        path: /health
+        port: 8545
+    liveness:
+      enabled: true
+      initialDelaySeconds: 60
+      periodSeconds: 30
+      timeoutSeconds: 10
+      failureThreshold: 3
+      httpGet:
+        path: /health
+        port: 8545
+
+# Snapshot jobs configuration
+snapshotJobs:
+  enabled: true
+  
+  # Snapshot creation job
+  create:
+    # Schedule (cron format)
+    schedule: "0 6 * * *"  # Daily at 6 AM
+    
+    # Image configuration
+    image:
+      repository: "ethereum/snapshot-builder"
+      tag: "latest"
+    
+    # Resources
+    resources:
+      limits:
+        cpu: "1"
+        memory: "2Gi"
+      requests:
+        cpu: "200m"
+        memory: "512Mi"
+    
+    # Snapshot configuration
+    retention: 7  # Keep 7 snapshots
+    compression: "gzip"
+    
+    # Registry configuration
+    registry:
+      push: true
+      repository: "ethereum/snapshots"
+      tag: "{{ .Values.global.network }}-{{ .Release.Revision }}"
+    
+    # Job configuration
+    activeDeadlineSeconds: 7200  # 2 hours
+    backoffLimit: 3
+    restartPolicy: OnFailure
+  
+  # Snapshot cleanup job
+  cleanup:
+    enabled: true
+    schedule: "0 4 * * 0"  # Weekly on Sunday at 4 AM
+    image:
+      repository: "ethereum/snapshot-cleaner"
+      tag: "latest"
+    resources:
+      limits:
+        cpu: "200m"
+        memory: "256Mi"
+      requests:
+        cpu: "100m"
+        memory: "128Mi"
+
+# Monitoring configuration
+monitoring:
+  enabled: true
+  
+  # ServiceMonitor for Prometheus
+  serviceMonitor:
+    enabled: true
+    namespace: ""  # Use default namespace if empty
+    labels:
+      app: ethereum-infrastructure
+    interval: 30s
+    scrapeTimeout: 10s
+    path: /debug/metrics/prometheus
+  
+  # PrometheusRule for alerts
+  prometheusRule:
+    enabled: true
+    namespace: ""
+    labels:
+      app: ethereum-infrastructure
+    rules:
+      - alert: EthereumNodeDown
+        expr: up{job="ethereum-nodes"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Ethereum node is down"
+          description: "Ethereum node {{ $labels.instance }} has been down for more than 5 minutes."
+      
+      - alert: EthereumSyncLag
+        expr: ethereum_chain_head_block - ethereum_chain_sync_block > 10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Ethereum node sync lag"
+          description: "Ethereum node {{ $labels.instance }} is lagging behind by {{ $value }} blocks."
+
+# Network policies
+networkPolicy:
+  enabled: false
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: observability
+        - namespaceSelector:
+            matchLabels:
+              name: istio-system
+      ports:
+        - protocol: TCP
+          port: 8545
+        - protocol: TCP
+          port: 6060
+
+# Service mesh configuration (Istio)
+istio:
+  enabled: true
+  
+  # Virtual service configuration
+  virtualService:
+    enabled: true
+    hosts:
+      - "rpc.{{ .Values.global.domain }}"
+    gateways:
+      - ethereum-gateway
+    http:
+      - match:
+          - uri:
+              prefix: "/"
+        route:
+          - destination:
+              host: ethereum-serve-nodes
+              port:
+                number: 8545
+        fault:
+          delay:
+            percentage:
+              value: 0.1
+            fixedDelay: 5s
+        retries:
+          attempts: 3
+          perTryTimeout: 30s
+        timeout: 60s
+  
+  # Destination rule
+  destinationRule:
+    enabled: true
+    host: ethereum-serve-nodes
+    trafficPolicy:
+      connectionPool:
+        tcp:
+          maxConnections: 100
+        http:
+          http1MaxPendingRequests: 50
+          maxRequestsPerConnection: 2
+      loadBalancer:
+        simple: LEAST_CONN
+      outlierDetection:
+        consecutiveErrors: 3
+        interval: 30s
+        baseEjectionTime: 30s
+        maxEjectionPercent: 50
+
+# RBAC configuration
+rbac:
+  create: true
+  serviceAccountName: "ethereum-infrastructure"
+  
+  # Additional permissions for snapshot jobs
+  rules:
+    - apiGroups: [""]
+      resources: ["pods"]
+      verbs: ["get", "list", "create", "delete"]
+    - apiGroups: ["batch"]
+      resources: ["jobs", "cronjobs"]
+      verbs: ["get", "list", "create", "delete", "patch"]
+
+# Common labels
+commonLabels:
+  app.kubernetes.io/name: ethereum-infrastructure
+  app.kubernetes.io/instance: "{{ .Release.Name }}"
+  app.kubernetes.io/version: "{{ .Chart.AppVersion }}"
+  app.kubernetes.io/managed-by: "{{ .Release.Service }}"
+  app.kubernetes.io/part-of: ethereum-infrastructure
+
+# Node selector and tolerations
+nodeSelector: {}
+tolerations: []
+affinity: {}

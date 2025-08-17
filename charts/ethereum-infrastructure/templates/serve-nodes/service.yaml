@@ -1,0 +1,26 @@
+{{- if .Values.serveNodes.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ethereum-infrastructure.serveNodeName" . }}
+  labels:
+    {{- include "ethereum-infrastructure.serveNodeLabels" . | nindent 4 }}
+  {{- with .Values.serveNodes.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.serveNodes.service.type }}
+  ports:
+  - name: rpc
+    port: {{ .Values.serveNodes.service.port }}
+    targetPort: {{ .Values.serveNodes.service.targetPort }}
+    protocol: TCP
+  - name: metrics
+    port: 6060
+    targetPort: metrics
+    protocol: TCP
+  selector:
+    {{- include "ethereum-infrastructure.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: serve-node
+{{- end }}

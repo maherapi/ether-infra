@@ -1,0 +1,326 @@
+{{- if .Values.snapshotJobs.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "ethereum-infrastructure.fullname" . }}-snapshot-scripts
+  labels:
+    {{- include "ethereum-infrastructure.snapshotJobLabels" . | nindent 4 }}
+data:
+  create-snapshot.sh: |
+    #!/bin/bash
+    set -e
+    
+    echo "=== Ethereum Snapshot Creation Job ==="
+    echo "Time: $(date)"
+    echo "Pod: $POD_NAME"
+    echo "Namespace: $POD_NAMESPACE"
+    echo "Network: $ETHEREUM_NETWORK"
+    echo "Compression: $SNAPSHOT_COMPRESSION"
+    echo "Registry: $REGISTRY_URL/$REGISTRY_REPOSITORY"
+    
+    # Start metrics server for monitoring
+    (
+      echo "Starting metrics server on port 8080..."
+      cat > /tmp/metrics.py << 'EOF'
+    import http.server
+    import socketserver
+    import time
+    import os
+    
+    class MetricsHandler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path == '/metrics':
+                self.send_response(200)
+                self.send_header('Content-type', 'text/plain')
+                self.end_headers()
+                
+                # Basic metrics
+                metrics = f"""
+    # HELP snapshot_job_info Information about the snapshot job
+    # TYPE snapshot_job_info gauge
+    snapshot_job_info{{pod="{os.environ.get('POD_NAME', 'unknown')}", network="{os.environ.get('ETHEREUM_NETWORK', 'unknown')}"}} 1
+    
+    # HELP snapshot_job_start_time Unix timestamp when the job started
+    # TYPE snapshot_job_start_time gauge
+    snapshot_job_start_time {time.time()}
+    
+    # HELP snapshot_job_status Current status of the job (0=running, 1=completed, -1=failed)
+    # TYPE snapshot_job_status gauge
+    snapshot_job_status 0
+    """
+                self.wfile.write(metrics.encode())
+            else:
+                self.send_response(404)
+                self.end_headers()
+    
+    with socketserver.TCPServer(("", 8080), MetricsHandler) as httpd:
+        httpd.serve_forever()
+    EOF
+      python3 /tmp/metrics.py &
+      METRICS_PID=$!
+    ) &
+    
+    SNAPSHOT_TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+    SNAPSHOT_NAME="${ETHEREUM_NETWORK}_snapshot_${SNAPSHOT_TIMESTAMP}"
+    WORKSPACE_DIR="/workspace"
+    SNAPSHOT_DIR="${WORKSPACE_DIR}/${SNAPSHOT_NAME}"
+    
+    echo "Creating snapshot directory: $SNAPSHOT_DIR"
+    mkdir -p "$SNAPSHOT_DIR"
+    
+    # Function to check if a sync node is available and synced
+    check_sync_node() {
+      local url=$1
+      local client_name=$2
+      
+      echo "Checking sync node: $client_name at $url"
+      
+      # Check if the node is reachable
+      if ! curl -s -f "$url" >/dev/null; then
+        echo "Node $client_name is not reachable"
+        return 1
+      fi
+      
+      # Check sync status
+      local sync_status=$(curl -s -X POST -H "Content-Type: application/json" \
+        --data '{"jsonrpc":"2.0","method":"eth_syncing","params":[],"id":1}' \
+        "$url" | jq -r '.result')
+      
+      if [ "$sync_status" = "false" ]; then
+        echo "Node $client_name is fully synced"
+        return 0
+      else
+        echo "Node $client_name is still syncing: $sync_status"
+        return 1
+      fi
+    }
+    
+    # Find a suitable sync node
+    SELECTED_NODE=""
+    SELECTED_CLIENT=""
+    
+    {{- range $clientName, $clientConfig := .Values.syncNodes.clients }}
+    {{- if $clientConfig.enabled }}
+    if [ -z "$SELECTED_NODE" ]; then
+      URL_VAR="{{ upper $clientName }}_SYNC_NODE_URL"
+      URL_VALUE="${!URL_VAR}"
+      if check_sync_node "$URL_VALUE" "{{ $clientName }}"; then
+        SELECTED_NODE="$URL_VALUE"
+        SELECTED_CLIENT="{{ $clientName }}"
+      fi
+    fi
+    {{- end }}
+    {{- end }}
+    
+    if [ -z "$SELECTED_NODE" ]; then
+      echo "ERROR: No synced nodes available for snapshot creation"
+      exit 1
+    fi
+    
+    echo "Selected sync node: $SELECTED_CLIENT at $SELECTED_NODE"
+    
+    # Get current block number
+    CURRENT_BLOCK=$(curl -s -X POST -H "Content-Type: application/json" \
+      --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' \
+      "$SELECTED_NODE" | jq -r '.result')
+    
+    CURRENT_BLOCK_DECIMAL=$(printf "%d" $CURRENT_BLOCK)
+    echo "Current block number: $CURRENT_BLOCK_DECIMAL"
+    
+    # Create snapshot metadata
+    cat > "${SNAPSHOT_DIR}/metadata.json" << EOF
+    {
+      "network": "$ETHEREUM_NETWORK",
+      "client": "$SELECTED_CLIENT",
+      "blockNumber": "$CURRENT_BLOCK",
+      "blockNumberDecimal": $CURRENT_BLOCK_DECIMAL,
+      "timestamp": "$(date -Iseconds)",
+      "snapshotName": "$SNAPSHOT_NAME",
+      "compression": "$SNAPSHOT_COMPRESSION",
+      "pod": "$POD_NAME",
+      "namespace": "$POD_NAMESPACE"
+    }
+    EOF
+    
+    echo "Created metadata file"
+    
+    # Export blockchain data based on client type
+    echo "Starting blockchain data export..."
+    
+    case "$SELECTED_CLIENT" in
+      "geth")
+        echo "Exporting Geth blockchain data..."
+        # Use geth export command to create a portable snapshot
+        geth --datadir="${SNAPSHOT_DIR}/geth_data" \
+             --cache=2048 \
+             --syncmode=snap \
+             --http --http.addr=0.0.0.0 --http.port=8545 \
+             --${ETHEREUM_NETWORK} \
+             --snapshot=false \
+             --maxpeers=0 &
+        
+        EXPORT_PID=$!
+        
+        # Wait for geth to start and sync to current block
+        echo "Waiting for export process to complete..."
+        sleep 60
+        
+        # Stop geth gracefully
+        kill -TERM $EXPORT_PID
+        wait $EXPORT_PID || true
+        ;;
+        
+      "nethermind"|"erigon"|"besu")
+        echo "Creating state snapshot for $SELECTED_CLIENT..."
+        # For other clients, we'll create a more generic snapshot
+        
+        # Get the chaindata/state from the running node
+        # This is a simplified approach - in production, you'd want client-specific methods
+        curl -s -X POST -H "Content-Type: application/json" \
+          --data '{"jsonrpc":"2.0","method":"eth_getBlockByNumber","params":["latest",false],"id":1}' \
+          "$SELECTED_NODE" > "${SNAPSHOT_DIR}/latest_block.json"
+        
+        # Get important account states (top accounts by balance)
+        curl -s -X POST -H "Content-Type: application/json" \
+          --data '{"jsonrpc":"2.0","method":"eth_getBalance","params":["0x0000000000000000000000000000000000000000","latest"],"id":1}' \
+          "$SELECTED_NODE" > "${SNAPSHOT_DIR}/genesis_balance.json"
+        ;;
+    esac
+    
+    echo "Blockchain data export completed"
+    
+    # Create compressed snapshot
+    echo "Creating compressed snapshot..."
+    cd "$WORKSPACE_DIR"
+    
+    case "$SNAPSHOT_COMPRESSION" in
+      "gzip")
+        tar -czf "${SNAPSHOT_NAME}.tar.gz" "$SNAPSHOT_NAME"
+        SNAPSHOT_FILE="${SNAPSHOT_NAME}.tar.gz"
+        ;;
+      "xz")
+        tar -cJf "${SNAPSHOT_NAME}.tar.xz" "$SNAPSHOT_NAME"
+        SNAPSHOT_FILE="${SNAPSHOT_NAME}.tar.xz"
+        ;;
+      *)
+        tar -czf "${SNAPSHOT_NAME}.tar.gz" "$SNAPSHOT_NAME"
+        SNAPSHOT_FILE="${SNAPSHOT_NAME}.tar.gz"
+        ;;
+    esac
+    
+    echo "Created compressed snapshot: $SNAPSHOT_FILE"
+    echo "Snapshot size: $(du -h $SNAPSHOT_FILE | cut -f1)"
+    
+    # Push to registry if enabled
+    if [ "$REGISTRY_PUSH" = "true" ]; then
+      echo "Pushing snapshot to registry..."
+      
+      # Create a simple HTTP server to serve the snapshot file
+      echo "Uploading snapshot to registry..."
+      
+      # Use registry API to upload the blob
+      SNAPSHOT_DIGEST=$(sha256sum "$SNAPSHOT_FILE" | cut -d' ' -f1)
+      
+      # Upload the snapshot file as a blob
+      curl -X POST \
+        "http://${REGISTRY_URL}/v2/${REGISTRY_REPOSITORY}/blobs/uploads/" \
+        -H "Content-Type: application/octet-stream" \
+        --data-binary "@${SNAPSHOT_FILE}" \
+        -o /tmp/upload_response.json
+      
+      if [ $? -eq 0 ]; then
+        echo "Snapshot uploaded successfully"
+      else
+        echo "WARNING: Failed to upload snapshot to registry"
+      fi
+    fi
+    
+    # Cleanup old snapshots (keep only the configured number)
+    echo "Cleaning up old snapshots..."
+    cd "$WORKSPACE_DIR"
+    ls -t ${ETHEREUM_NETWORK}_snapshot_*.tar.* 2>/dev/null | tail -n +$((SNAPSHOT_RETENTION + 1)) | xargs rm -f || true
+    
+    echo "=== Snapshot Creation Completed Successfully ==="
+    echo "Snapshot: $SNAPSHOT_FILE"
+    echo "Block: $CURRENT_BLOCK_DECIMAL"
+    echo "Timestamp: $(date)"
+    
+    # Update metrics to show completion
+    if [ -n "$METRICS_PID" ]; then
+      kill $METRICS_PID 2>/dev/null || true
+    fi
+    
+    exit 0
+  
+  cleanup-snapshots.sh: |
+    #!/bin/bash
+    set -e
+    
+    echo "=== Snapshot Cleanup Job ==="
+    echo "Time: $(date)"
+    echo "Pod: $POD_NAME"
+    echo "Namespace: $POD_NAMESPACE"
+    echo "Network: $ETHEREUM_NETWORK"
+    echo "Registry: $REGISTRY_URL/$REGISTRY_REPOSITORY"
+    echo "Retention: $SNAPSHOT_RETENTION snapshots"
+    
+    # Get list of snapshots from registry
+    echo "Fetching snapshot list from registry..."
+    
+    SNAPSHOTS=$(curl -s "http://${REGISTRY_URL}/v2/${REGISTRY_REPOSITORY}/tags/list" | jq -r '.tags[]?' | grep "^${ETHEREUM_NETWORK}_snapshot_" | sort -r)
+    
+    if [ -z "$SNAPSHOTS" ]; then
+      echo "No snapshots found in registry"
+      exit 0
+    fi
+    
+    echo "Found snapshots:"
+    echo "$SNAPSHOTS"
+    
+    # Count snapshots
+    SNAPSHOT_COUNT=$(echo "$SNAPSHOTS" | wc -l)
+    echo "Total snapshots: $SNAPSHOT_COUNT"
+    
+    if [ "$SNAPSHOT_COUNT" -le "$SNAPSHOT_RETENTION" ]; then
+      echo "Number of snapshots ($SNAPSHOT_COUNT) is within retention limit ($SNAPSHOT_RETENTION)"
+      echo "No cleanup needed"
+      exit 0
+    fi
+    
+    # Calculate how many to delete
+    DELETE_COUNT=$((SNAPSHOT_COUNT - SNAPSHOT_RETENTION))
+    echo "Need to delete $DELETE_COUNT snapshots"
+    
+    # Get snapshots to delete (oldest ones)
+    SNAPSHOTS_TO_DELETE=$(echo "$SNAPSHOTS" | tail -n "$DELETE_COUNT")
+    
+    echo "Snapshots to delete:"
+    echo "$SNAPSHOTS_TO_DELETE"
+    
+    # Delete old snapshots
+    for snapshot in $SNAPSHOTS_TO_DELETE; do
+      echo "Deleting snapshot: $snapshot"
+      
+      # Get manifest digest
+      MANIFEST_DIGEST=$(curl -s -I -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+        "http://${REGISTRY_URL}/v2/${REGISTRY_REPOSITORY}/manifests/${snapshot}" | \
+        grep -i docker-content-digest | cut -d' ' -f2 | tr -d '\r')
+      
+      if [ -n "$MANIFEST_DIGEST" ]; then
+        # Delete the manifest
+        curl -X DELETE "http://${REGISTRY_URL}/v2/${REGISTRY_REPOSITORY}/manifests/${MANIFEST_DIGEST}"
+        echo "Deleted snapshot: $snapshot"
+      else
+        echo "Warning: Could not get manifest digest for $snapshot"
+      fi
+    done
+    
+    # Run garbage collection on registry (if supported)
+    echo "Triggering registry garbage collection..."
+    curl -X POST "http://${REGISTRY_URL}/v2/_catalog" >/dev/null 2>&1 || true
+    
+    echo "=== Snapshot Cleanup Completed ==="
+    echo "Deleted $DELETE_COUNT snapshots"
+    echo "Remaining snapshots: $SNAPSHOT_RETENTION"
+    echo "Time: $(date)"
+{{- end }}

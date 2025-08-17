@@ -1,0 +1,184 @@
+# Sepolia Testnet Configuration
+# Network-specific configuration for Ethereum Sepolia testnet
+
+# Network information
+network:
+  name: "sepolia"
+  chainId: 11155111
+  consensus: "proof-of-stake"
+  
+# Bootnodes for Sepolia network
+bootnodes:
+  - "enode://4e5e92199ee224a01932a377160aa432f31d0b351f84ab413a8e0a42f4f36476f8fb1cbe914af0d9aef0d51665c214cf653c651c4bbd9d5550a934f241f1682b@138.197.51.181:30303"
+  - "enode://143e11fb766781d22d92a2e33f8f104cddae4411a122295ed6c6264db00ccb65f0c7b18bcfc7c4b3db2c1b93c7a0db13c78ff1e3b57fcb1a24e2a5e4b7b11cd31@146.190.13.128:30303"
+  - "enode://8b61dc2d06c3f96fddcbebb0efb29d60d3598650275dc469c22229d3e5620369b0d3dedafd929835fe7f489618f19f456fe7c0df572bf2d914a9f4e006f783a9@170.64.250.88:30303"
+  - "enode://10d62eff032205fcef19497f35ca8477bea0eadfff6d769a147e895d8b2b8f8ae6341630c645c30f5df6e67547c03494ced3d9c5764e8622a26587b083b028e8@139.59.49.206:30303"
+  - "enode://9e9492e2e8836114cc75f5b929784f4f46c324ad01daf87d956f98b3b6c5fcba95524d6e5cf9861dc96a2c8a171ea7105bb554a197455058de185fa870970c7c@138.68.123.152:30303"
+
+# Client-specific configurations for Sepolia
+clients:
+  geth:
+    args:
+      - "--sepolia"
+      - "--datadir=/data"
+      - "--http"
+      - "--http.addr=0.0.0.0"
+      - "--http.port=8545"
+      - "--http.api=eth,net,web3,txpool"
+      - "--http.corsdomain=*"
+      - "--http.vhosts=*"
+      - "--ws"
+      - "--ws.addr=0.0.0.0"
+      - "--ws.port=8546"
+      - "--ws.api=eth,net,web3"
+      - "--ws.origins=*"
+      - "--metrics"
+      - "--metrics.addr=0.0.0.0"
+      - "--metrics.port=6060"
+      - "--syncmode=snap"
+      - "--gcmode=archive"
+    storage:
+      # Sepolia is smaller than mainnet
+      size: "200Gi"
+    resources:
+      limits:
+        cpu: "2"
+        memory: "4Gi"
+      requests:
+        cpu: "500m"
+        memory: "1Gi"
+  
+  nethermind:
+    args:
+      - "--config=sepolia"
+      - "--datadir=/data"
+      - "--JsonRpc.Enabled=true"
+      - "--JsonRpc.Host=0.0.0.0"
+      - "--JsonRpc.Port=8545"
+      - "--JsonRpc.EnabledModules=Eth,Subscribe,Trace,TxPool,Web3,Personal,Proof,Net,Parity,Health"
+      - "--Metrics.Enabled=true"
+      - "--Metrics.ExposePort=6060"
+      - "--Sync.FastSync=true"
+      - "--Sync.SnapSync=true"
+    storage:
+      size: "150Gi"
+    resources:
+      limits:
+        cpu: "2"
+        memory: "4Gi"
+      requests:
+        cpu: "500m"
+        memory: "1Gi"
+  
+  erigon:
+    args:
+      - "--chain=sepolia"
+      - "--datadir=/data"
+      - "--http.addr=0.0.0.0"
+      - "--http.port=8545"
+      - "--http.api=eth,debug,net,trace,web3,erigon"
+      - "--http.corsdomain=*"
+      - "--http.vhosts=*"
+      - "--metrics"
+      - "--metrics.addr=0.0.0.0"
+      - "--metrics.port=6060"
+      - "--prune=hrtc"
+    storage:
+      size: "100Gi"  # Erigon is more storage efficient
+    resources:
+      limits:
+        cpu: "2"
+        memory: "4Gi"
+      requests:
+        cpu: "500m"
+        memory: "1Gi"
+  
+  besu:
+    args:
+      - "--network=sepolia"
+      - "--data-path=/data"
+      - "--rpc-http-enabled=true"
+      - "--rpc-http-host=0.0.0.0"
+      - "--rpc-http-port=8545"
+      - "--rpc-http-api=ETH,NET,WEB3,ADMIN,DEBUG,TXPOOL"
+      - "--rpc-http-cors-origins=*"
+      - "--rpc-ws-enabled=true"
+      - "--rpc-ws-host=0.0.0.0"
+      - "--rpc-ws-port=8546"
+      - "--metrics-enabled=true"
+      - "--metrics-host=0.0.0.0"
+      - "--metrics-port=9545"
+      - "--sync-mode=FAST"
+    storage:
+      size: "200Gi"
+    resources:
+      limits:
+        cpu: "2"
+        memory: "4Gi"
+      requests:
+        cpu: "500m"
+        memory: "1Gi"
+
+# Testnet-specific monitoring thresholds
+monitoring:
+  alerts:
+    # More lenient sync lag for testnet
+    syncLagBlocks: 50
+    syncLagDuration: "30m"
+    
+    # Lower peer count threshold for testnet
+    minPeerCount: 3
+    
+    # Resource thresholds
+    memoryThreshold: 85
+    cpuThreshold: 80
+    diskThreshold: 85
+
+# Snapshot configuration for Sepolia
+snapshots:
+  # More frequent snapshots for testnet (for testing)
+  schedule: "0 */12 * * *"  # Every 12 hours
+  retention: 5
+  compression: "gzip"
+  
+  # Faster sync settings for testnet
+  deltaSync:
+    enabled: true
+    timeout: 1200  # 20 minutes
+    maxPeers: 15
+
+# Network-specific service configuration
+service:
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+    service.beta.kubernetes.io/aws-load-balancer-backend-protocol: "tcp"
+  
+# Istio configuration for Sepolia
+istio:
+  virtualService:
+    timeout: "60s"
+    retries:
+      attempts: 3
+      perTryTimeout: "20s"
+  
+  destinationRule:
+    outlierDetection:
+      consecutiveErrors: 5
+      interval: "30s"
+      baseEjectionTime: "30s"
+
+# Security policies for testnet
+security:
+  networkPolicies:
+    enabled: true
+    allowedPorts:
+      - 8545  # RPC
+      - 8546  # WebSocket
+      - 30303 # P2P
+      - 6060  # Metrics
+  
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000

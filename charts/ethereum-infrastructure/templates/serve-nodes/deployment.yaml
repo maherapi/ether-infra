@@ -1,0 +1,186 @@
+{{- if .Values.serveNodes.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ethereum-infrastructure.serveNodeName" . }}
+  labels:
+    {{- include "ethereum-infrastructure.serveNodeLabels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.serveNodes.replicas }}
+  selector:
+    matchLabels:
+      {{- include "ethereum-infrastructure.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: serve-node
+  template:
+    metadata:
+      labels:
+        {{- include "ethereum-infrastructure.serveNodeLabels" . | nindent 8 }}
+      annotations:
+        {{- with .Values.serveNodes.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        checksum/config: {{ include (print $.Template.BasePath "/serve-nodes/configmap.yaml") . | sha256sum }}
+    spec:
+      {{- include "ethereum-infrastructure.podSecurityContext" . | nindent 6 }}
+      serviceAccountName: {{ include "ethereum-infrastructure.serviceAccountName" . }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+      {{- if .Values.serveNodes.deltaSync.enabled }}
+      - name: delta-sync
+        image: {{ include "ethereum-infrastructure.image" .Values.serveNodes.deltaSync.image }}
+        imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+        {{- include "ethereum-infrastructure.securityContext" . | nindent 8 }}
+        command:
+        - /bin/sh
+        - -c
+        - |
+          echo "Starting delta sync process..."
+          
+          # Check if we have any sync nodes available
+          SYNC_NODES=$(nslookup {{ include "ethereum-infrastructure.syncNodeName" "geth" }}-headless.{{ .Release.Namespace }}.svc.cluster.local | grep -c "Address:" || echo "0")
+          
+          if [ "$SYNC_NODES" -gt "0" ]; then
+            echo "Found $SYNC_NODES sync nodes, starting delta sync..."
+            
+            # Get latest snapshot from registry
+            LATEST_SNAPSHOT=$(curl -s http://docker-registry.{{ .Values.global.namespaces.registry }}.svc.cluster.local:5000/v2/ethereum/snapshots/tags/list | jq -r '.tags | sort | .[-1]')
+            
+            if [ "$LATEST_SNAPSHOT" != "null" ] && [ "$LATEST_SNAPSHOT" != "" ]; then
+              echo "Found snapshot: $LATEST_SNAPSHOT"
+              
+              # Download and extract snapshot
+              wget -O /tmp/snapshot.tar.gz "http://docker-registry.{{ .Values.global.namespaces.registry }}.svc.cluster.local:5000/v2/ethereum/snapshots/blobs/$LATEST_SNAPSHOT"
+              tar -xzf /tmp/snapshot.tar.gz -C /data
+              rm /tmp/snapshot.tar.gz
+              
+              echo "Snapshot extracted successfully"
+            else
+              echo "No snapshot found, performing full sync..."
+              
+              # Sync from available sync node
+              SYNC_NODE_URL="http://{{ include "ethereum-infrastructure.syncNodeName" "geth" }}.{{ .Release.Namespace }}.svc.cluster.local:8545"
+              
+              # Perform incremental sync
+              geth --datadir=/data --syncmode=snap --snapshot=false \
+                   --http --http.addr=0.0.0.0 --http.port=8545 \
+                   --bootnodes="{{ include "ethereum-infrastructure.bootnodes" . }}" \
+                   --maxpeers=10 &
+              
+              PID=$!
+              
+              # Wait for initial sync (up to 30 minutes)
+              timeout 1800 bash -c 'while ! curl -s $0 >/dev/null; do sleep 10; done' "$SYNC_NODE_URL"
+              
+              # Stop geth gracefully
+              kill -TERM $PID
+              wait $PID
+            fi
+          else
+            echo "No sync nodes available, skipping delta sync"
+          fi
+          
+          echo "Delta sync completed"
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        volumeMounts:
+        - name: data
+          mountPath: /data
+        {{- include "ethereum-infrastructure.resources" .Values.serveNodes.deltaSync.resources | nindent 8 }}
+      {{- end }}
+      containers:
+      - name: ethereum-serve
+        image: {{ include "ethereum-infrastructure.image" .Values.serveNodes.image }}
+        imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+        {{- include "ethereum-infrastructure.securityContext" . | nindent 8 }}
+        ports:
+        - name: rpc
+          containerPort: 8545
+          protocol: TCP
+        - name: metrics
+          containerPort: 6060
+          protocol: TCP
+        command:
+        - /bin/sh
+        - /config/startup.sh
+        args:
+        {{- toYaml .Values.serveNodes.args | nindent 8 }}
+        {{- if include "ethereum-infrastructure.bootnodes" . }}
+        - "--bootnodes={{ include "ethereum-infrastructure.bootnodes" . }}"
+        {{- end }}
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        volumeMounts:
+        - name: data
+          mountPath: /data
+        - name: config
+          mountPath: /config
+          readOnly: true
+        {{- if .Values.ethereum.genesis }}
+        - name: genesis
+          mountPath: /genesis
+          readOnly: true
+        {{- end }}
+        {{- if .Values.serveNodes.probes.readiness.enabled }}
+        readinessProbe:
+          httpGet:
+            path: {{ .Values.serveNodes.probes.readiness.httpGet.path }}
+            port: {{ .Values.serveNodes.probes.readiness.httpGet.port }}
+          initialDelaySeconds: {{ .Values.serveNodes.probes.readiness.initialDelaySeconds }}
+          periodSeconds: {{ .Values.serveNodes.probes.readiness.periodSeconds }}
+          timeoutSeconds: {{ .Values.serveNodes.probes.readiness.timeoutSeconds }}
+          failureThreshold: {{ .Values.serveNodes.probes.readiness.failureThreshold }}
+        {{- end }}
+        {{- if .Values.serveNodes.probes.liveness.enabled }}
+        livenessProbe:
+          httpGet:
+            path: {{ .Values.serveNodes.probes.liveness.httpGet.path }}
+            port: {{ .Values.serveNodes.probes.liveness.httpGet.port }}
+          initialDelaySeconds: {{ .Values.serveNodes.probes.liveness.initialDelaySeconds }}
+          periodSeconds: {{ .Values.serveNodes.probes.liveness.periodSeconds }}
+          timeoutSeconds: {{ .Values.serveNodes.probes.liveness.timeoutSeconds }}
+          failureThreshold: {{ .Values.serveNodes.probes.liveness.failureThreshold }}
+        {{- end }}
+        {{- include "ethereum-infrastructure.resources" .Values.serveNodes.resources | nindent 8 }}
+      volumes:
+      - name: data
+        emptyDir:
+          sizeLimit: {{ .Values.serveNodes.storage.size }}
+      - name: config
+        configMap:
+          name: {{ include "ethereum-infrastructure.fullname" . }}-serve-config
+          defaultMode: 0755
+      {{- if .Values.ethereum.genesis }}
+      - name: genesis
+        configMap:
+          name: {{ include "ethereum-infrastructure.fullname" . }}-genesis
+      {{- end }}
+      {{- include "ethereum-infrastructure.nodeSelector" . | nindent 6 }}
+      {{- include "ethereum-infrastructure.tolerations" . | nindent 6 }}
+      {{- include "ethereum-infrastructure.affinity" (dict "antiAffinity" .Values.serveNodes.antiAffinity "component" "serve-node" "Values" .Values) | nindent 6 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+{{- end }}

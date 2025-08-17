@@ -1,0 +1,39 @@
+apiVersion: v2
+name: ethereum-infrastructure
+description: A Helm chart for deploying Ethereum node infrastructure with multiple clients and snapshot capabilities
+version: 0.1.0
+appVersion: "1.0.0"
+
+keywords:
+  - ethereum
+  - blockchain
+  - geth
+  - nethermind
+  - erigon
+  - besu
+
+home: https://github.com/ethereum/ethereum-node-infrastructure
+sources:
+  - https://github.com/ethereum/go-ethereum
+  - https://github.com/NethermindEth/nethermind
+  - https://github.com/ledgerwatch/erigon
+  - https://github.com/hyperledger/besu
+
+maintainers:
+  - name: Ethereum Infrastructure Team
+    email: infrastructure@ethereum.dev
+
+annotations:
+  category: Infrastructure
+  artifacthub.io/license: MIT
+  artifacthub.io/changes: |
+    - Initial release with multi-client support
+    - Snapshot functionality for fast sync
+    - Service mesh integration
+    - Comprehensive monitoring
+
+dependencies:
+  - name: common
+    repository: https://charts.bitnami.com/bitnami
+    version: 2.x.x
+    condition: common.enabled

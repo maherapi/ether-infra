@@ -1,0 +1,108 @@
+{{- if .Values.serveNodes.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "ethereum-infrastructure.fullname" . }}-serve-config
+  labels:
+    {{- include "ethereum-infrastructure.serveNodeLabels" . | nindent 4 }}
+data:
+  startup.sh: |
+    #!/bin/bash
+    set -e
+    
+    echo "Starting Ethereum Serve Node"
+    echo "Network: {{ .Values.ethereum.network }}"
+    echo "Pod: $POD_NAME"
+    echo "Namespace: $POD_NAMESPACE"
+    echo "Node: $NODE_NAME"
+    
+    # Wait for storage to be ready
+    while [ ! -d "/data" ]; do
+      echo "Waiting for data directory..."
+      sleep 5
+    done
+    
+    # Set proper permissions
+    chown -R 1000:1000 /data
+    
+    # Check if we have blockchain data from delta sync
+    if [ -f "/data/geth/chaindata/CURRENT" ]; then
+      echo "Found existing blockchain data from delta sync"
+    else
+      echo "No existing data found, will sync from scratch"
+      {{- if .Values.ethereum.genesis }}
+      echo "Initializing with custom genesis"
+      geth --datadir=/data init /genesis/genesis.json
+      {{- end }}
+    fi
+    
+    # Health check endpoint
+    cat > /data/health.json << 'EOF'
+    {
+      "status": "starting",
+      "timestamp": "$(date -Iseconds)",
+      "pod": "$POD_NAME",
+      "network": "{{ .Values.ethereum.network }}"
+    }
+    EOF
+    
+    # Start background health updater
+    (
+      while true; do
+        sleep 30
+        BLOCK_NUMBER=$(curl -s -X POST -H "Content-Type: application/json" \
+          --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' \
+          http://localhost:8545 | jq -r '.result // "0x0"' 2>/dev/null || echo "0x0")
+        
+        SYNC_STATUS=$(curl -s -X POST -H "Content-Type: application/json" \
+          --data '{"jsonrpc":"2.0","method":"eth_syncing","params":[],"id":1}' \
+          http://localhost:8545 | jq -r '.result // false' 2>/dev/null || echo "false")
+        
+        cat > /data/health.json << EOF
+    {
+      "status": "running",
+      "timestamp": "$(date -Iseconds)",
+      "pod": "$POD_NAME",
+      "network": "{{ .Values.ethereum.network }}",
+      "blockNumber": "$BLOCK_NUMBER",
+      "syncing": $SYNC_STATUS
+    }
+    EOF
+      done
+    ) &
+    
+    echo "Starting Geth client..."
+    exec "$@"
+  
+  health-check.sh: |
+    #!/bin/bash
+    
+    # Check if the RPC endpoint is responding
+    if ! curl -s -f -X POST -H "Content-Type: application/json" \
+      --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' \
+      http://localhost:8545 >/dev/null; then
+      echo "RPC endpoint not responding"
+      exit 1
+    fi
+    
+    # Check if we're significantly behind
+    BLOCK_NUMBER=$(curl -s -X POST -H "Content-Type: application/json" \
+      --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' \
+      http://localhost:8545 | jq -r '.result // "0x0"' 2>/dev/null)
+    
+    if [ "$BLOCK_NUMBER" = "0x0" ]; then
+      echo "Node has not synced any blocks yet"
+      exit 1
+    fi
+    
+    # Convert hex to decimal for comparison
+    BLOCK_DECIMAL=$(printf "%d" $BLOCK_NUMBER 2>/dev/null || echo "0")
+    
+    if [ "$BLOCK_DECIMAL" -lt 100 ]; then
+      echo "Block number too low: $BLOCK_DECIMAL"
+      exit 1
+    fi
+    
+    echo "Node is healthy - Block: $BLOCK_DECIMAL"
+    exit 0
+{{- end }}
