@@ -1,0 +1,15 @@
+# helm repo add harbor https://helm.goharbor.io
+# harbor/harbor
+
+repositories:
+  - name: harbor
+    url: https://helm.goharbor.io
+
+releases:
+  - name: harbor
+    chart: harbor/harbor
+    namespace: harbor
+    createNamespace: true
+    version: 1.17.1
+    values:
+      - ../../values/harbor/values.yaml

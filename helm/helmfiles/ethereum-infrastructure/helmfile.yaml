@@ -1,0 +1,10 @@
+
+
+releases:
+  - name: ethereum-infrastructure
+    chart: ../../charts/ethereum-infrastructure
+    namespace: ethereum-infrastructure
+    createNamespace: true
+    version: 1.17.1
+    values:
+      - ../../values/ethereum-infrastructure/values.yaml

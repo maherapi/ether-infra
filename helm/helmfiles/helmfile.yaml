@@ -1,0 +1,12 @@
+helmfiles:
+  - ./*/helmfile.yaml
+
+helmDefaults:
+  kubeContext: kind-ethereum-cluster
+  createNamespace: true
+  wait: true
+  timeout: 600
+  atomic: true
+  cleanupOnFail: true
+  force: false
+  verify: true

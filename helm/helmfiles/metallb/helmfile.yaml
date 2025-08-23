@@ -1,0 +1,22 @@
+repositories:
+  - name: metallb
+    url: https://metallb.github.io/metallb
+
+releases:
+  - name: metallb
+    chart: metallb/metallb
+    namespace: metallb-system
+    createNamespace: true
+    version: ~0.15.0
+    values:
+      - ../../values/metallb/values.yaml
+  
+  - name: metallb-ip-address-pool
+    chart: ../../charts/raw
+    namespace: metallb-system
+    createNamespace: true
+    version: 0.2.5
+    needs:
+      - metallb
+    values:
+      - ../../values/metallb/ip-address-pool.yaml
