@@ -1,0 +1,33 @@
+{{- range $client := .Values.syncNodes.clients }}
+{{- if $client.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $client.name }}-sync-node
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "ethereum-infrastructure.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: sync-node
+    app.kubernetes.io/client: {{ $client.name }}
+spec:
+  type: ClusterIP
+  ports:
+  - port: {{ $.Values.service.rpc.port }}
+    targetPort: {{ $.Values.service.rpc.targetPort }}
+    protocol: TCP
+    name: rpc
+  - port: 8546
+    targetPort: 8546
+    protocol: TCP
+    name: ws
+  - port: 6060
+    targetPort: 6060
+    protocol: TCP
+    name: metrics
+  selector:
+    {{- include "ethereum-infrastructure.selectorLabels" $ | nindent 4 }}
+    app.kubernetes.io/component: sync-node
+    app.kubernetes.io/client: {{ $client.name }}
+{{- end }}
+{{- end }}

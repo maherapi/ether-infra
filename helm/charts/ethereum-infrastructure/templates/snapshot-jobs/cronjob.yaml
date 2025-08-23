@@ -1,0 +1,69 @@
+{{- if .Values.snapshotJobs.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ethereum-snapshot-job
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ethereum-infrastructure.labels" . | nindent 4 }}
+    app.kubernetes.io/component: snapshot-job
+spec:
+  schedule: {{ .Values.snapshotJobs.schedule | quote }}
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            {{- include "ethereum-infrastructure.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: snapshot-job
+        spec:
+          restartPolicy: OnFailure
+          serviceAccountName: snapshot-builder
+          containers:
+          - name: snapshot-builder
+            image: {{ .Values.snapshotJobs.image }}
+            imagePullPolicy: IfNotPresent
+            env:
+            - name: ETHEREUM_NETWORK
+              value: {{ .Values.global.ethereumNetwork }}
+            - name: REGISTRY_URL
+              value: {{ .Values.snapshotJobs.registry.url }}
+            - name: RETENTION_COUNT
+              value: {{ .Values.snapshotJobs.retention.keep | quote }}
+            command:
+            - /bin/sh
+            - -c
+            - |
+              set -euo pipefail
+              echo "🔄 Starting snapshot creation job..."
+              
+              # Get latest block from sync node
+              SYNC_NODE_URL="http://geth-sync-node:8545"
+              echo "📊 Checking sync node status at $SYNC_NODE_URL"
+              
+              # Simple health check
+              if ! curl -s -f $SYNC_NODE_URL >/dev/null; then
+                echo "❌ Sync node not available"
+                exit 1
+              fi
+              
+              # Get current block number
+              CURRENT_BLOCK=$(curl -s -X POST $SYNC_NODE_URL \
+                -H "Content-Type: application/json" \
+                -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' \
+                | grep -o '"result":"[^"]*"' | cut -d'"' -f4 || echo "0x0")
+              
+              echo "📦 Current block: $CURRENT_BLOCK"
+              echo "✅ Snapshot job completed (placeholder implementation)"
+              
+              # TODO: Implement actual snapshot creation and image building
+            resources:
+              requests:
+                cpu: 100m
+                memory: 256Mi
+              limits:
+                cpu: 500m
+                memory: 512Mi
+{{- end }}

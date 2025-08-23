@@ -1,0 +1,45 @@
+{{- if .Values.snapshotJobs.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: snapshot-builder
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ethereum-infrastructure.labels" . | nindent 4 }}
+    app.kubernetes.io/component: snapshot-job
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: snapshot-builder
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ethereum-infrastructure.labels" . | nindent 4 }}
+    app.kubernetes.io/component: snapshot-job
+rules:
+- apiGroups: [""]
+  resources: ["pods", "services"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "statefulsets"]
+  verbs: ["get", "list", "watch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: snapshot-builder
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ethereum-infrastructure.labels" . | nindent 4 }}
+    app.kubernetes.io/component: snapshot-job
+subjects:
+- kind: ServiceAccount
+  name: snapshot-builder
+  namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: snapshot-builder
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}

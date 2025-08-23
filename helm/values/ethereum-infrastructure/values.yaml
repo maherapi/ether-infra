@@ -1,0 +1,68 @@
+# Global configuration
+global:
+  environment: local
+  ethereumNetwork: sepolia
+  imageRegistry: localhost:5000
+
+# Sync nodes configuration
+syncNodes:
+  enabled: true
+  clients:
+    - name: geth
+      enabled: true
+      image: ethereum/client-go:alltools-v1.16.2
+      mode: snap
+      resources:
+        requests:
+          cpu: 1000m
+          memory: 4Gi
+        limits:
+          cpu: 2000m
+          memory: 8Gi
+      storage:
+        size: 100Gi
+        storageClass: standard
+      
+
+# Serve nodes configuration
+serveNodes:
+  enabled: true
+  replicas: 2
+  image: ethereum/client-go:alltools-v1.16.2
+  
+  resources:
+    requests:
+      cpu: 500m
+      memory: 2Gi
+    limits:
+      cpu: 1000m
+      memory: 4Gi
+  
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+
+# Snapshot jobs configuration
+snapshotJobs:
+  enabled: false 
+  schedule: "0 */6 * * *"  # Every 6 hours
+  image: "busybox:latest"  # Placeholder for snapshot builder
+  
+  registry:
+    url: "localhost:5000"
+    secretName: registry-credentials
+  
+  retention:
+    keep: 5  # Keep last 5 snapshots
+
+# Service configuration
+service:
+  rpc:
+    port: 8545
+    targetPort: 8545
+  p2p:
+    port: 30303
+    targetPort: 30303

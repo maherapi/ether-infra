@@ -1,0 +1,123 @@
+{{- range $client := .Values.syncNodes.clients }}
+{{- if $client.enabled }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $client.name }}-sync-node
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "ethereum-infrastructure.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: sync-node
+    app.kubernetes.io/client: {{ $client.name }}
+spec:
+  serviceName: {{ $client.name }}-sync-node
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "ethereum-infrastructure.selectorLabels" $ | nindent 6 }}
+      app.kubernetes.io/component: sync-node
+      app.kubernetes.io/client: {{ $client.name }}
+  template:
+    metadata:
+      labels:
+        {{- include "ethereum-infrastructure.selectorLabels" $ | nindent 8 }}
+        app.kubernetes.io/component: sync-node
+        app.kubernetes.io/client: {{ $client.name }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "6060"
+        prometheus.io/path: "/debug/metrics/prometheus"
+    spec:
+      containers:
+      - name: {{ $client.name }}
+        image: {{ $client.image }}
+        imagePullPolicy: IfNotPresent
+        command:
+        {{- if eq $client.name "geth" }}
+        - geth
+        - --{{ $.Values.global.ethereumNetwork }}
+        - --syncmode={{ $client.mode }}
+        - --datadir=/data
+        - --http
+        - --http.addr=0.0.0.0
+        - --http.port=8545
+        - --http.api=eth,net,web3
+        - --http.corsdomain=*
+        - --http.vhosts=*
+        - --ws
+        - --ws.addr=0.0.0.0
+        - --ws.port=8546
+        - --ws.api=eth,net,web3
+        - --metrics
+        - --metrics.addr=0.0.0.0
+        - --metrics.port=6060
+        - --pprof
+        - --pprof.addr=0.0.0.0
+        {{- else if eq $client.name "nethermind" }}
+        - ./Nethermind.Runner
+        - --config={{ $.Values.global.ethereumNetwork }}
+        - --datadir=/data
+        - --JsonRpc.Enabled=true
+        - --JsonRpc.Host=0.0.0.0
+        - --JsonRpc.Port=8545
+        - --JsonRpc.EnabledModules=Eth,Net,Web3
+        - --Metrics.Enabled=true
+        - --Metrics.ExposeHost=0.0.0.0
+        - --Metrics.ExposePort=6060
+        {{- end }}
+        ports:
+        - containerPort: 8545
+          name: rpc
+          protocol: TCP
+        - containerPort: 8546
+          name: ws
+          protocol: TCP
+        - containerPort: 30303
+          name: p2p-tcp
+          protocol: TCP
+        - containerPort: 30303
+          name: p2p-udp
+          protocol: UDP
+        - containerPort: 6060
+          name: metrics
+          protocol: TCP
+        volumeMounts:
+        - name: chaindata
+          mountPath: /data
+        resources:
+          {{- toYaml $client.resources | nindent 10 }}
+        livenessProbe:
+          httpGet:
+            path: /
+            port: rpc
+          initialDelaySeconds: 300
+          periodSeconds: 60
+          timeoutSeconds: 10
+          failureThreshold: 5
+        readinessProbe:
+          httpGet:
+            path: /
+            port: rpc
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+        startupProbe:
+          httpGet:
+            path: /
+            port: rpc
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          failureThreshold: 30  # Allow 15 minutes for initial sync
+  volumeClaimTemplates:
+  - metadata:
+      name: chaindata
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: {{ $client.storage.storageClass }}
+      resources:
+        requests:
+          storage: {{ $client.storage.size }}
+{{- end }}
+{{- end }}

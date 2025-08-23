@@ -1,0 +1,90 @@
+{{- if .Values.serveNodes.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ethereum-serve-nodes
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ethereum-infrastructure.labels" . | nindent 4 }}
+    app.kubernetes.io/component: serve-node
+spec:
+  replicas: {{ .Values.serveNodes.replicas }}
+  selector:
+    matchLabels:
+      {{- include "ethereum-infrastructure.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: serve-node
+  template:
+    metadata:
+      labels:
+        {{- include "ethereum-infrastructure.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: serve-node
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "6060"
+        prometheus.io/path: "/debug/metrics/prometheus"
+    spec:
+      initContainers:
+      - name: wait-for-sync
+        image: busybox:latest
+        command:
+        - /bin/sh
+        - -c
+        - |
+          echo "Waiting for sync node to be ready..."
+          until nc -z geth-sync-node 8545; do
+            echo "Sync node not ready, waiting..."
+            sleep 30
+          done
+          echo "Sync node is ready!"
+      containers:
+      - name: ethereum-rpc
+        image: {{ .Values.serveNodes.image }}
+        command:
+        - geth
+        - --{{ .Values.global.ethereumNetwork }}
+        - --datadir=/tmp/empty  # Temporary datadir, will be replaced by snapshot
+        - --http
+        - --http.addr=0.0.0.0
+        - --http.port=8545
+        - --http.api=eth,net,web3
+        - --http.corsdomain=*
+        - --http.vhosts=*
+        - --maxpeers=5  # Fewer peers for RPC-focused nodes
+        - --metrics
+        - --metrics.addr=0.0.0.0
+        - --metrics.port=6060
+        - --syncmode=snap
+        - --snapshot=false
+        ports:
+        - containerPort: 8545
+          name: rpc
+          protocol: TCP
+        - containerPort: 6060
+          name: metrics
+          protocol: TCP
+        resources:
+          {{- toYaml .Values.serveNodes.resources | nindent 10 }}
+        livenessProbe:
+          httpGet:
+            path: /
+            port: rpc
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /
+            port: rpc
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        startupProbe:
+          httpGet:
+            path: /
+            port: rpc
+          initialDelaySeconds: 30
+          periodSeconds: 15
+          failureThreshold: 20  # Allow 5 minutes for startup
+{{- end }}
