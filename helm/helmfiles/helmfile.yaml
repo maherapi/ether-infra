@@ -1,5 +1,6 @@
 helmfiles:
-  - ./*/helmfile.yaml
+  - ./ethereum-infrastructure/helmfile.yaml
+  - ./monitoring/helmfile.yaml
 
 helmDefaults:
   kubeContext: kind-ethereum-cluster
