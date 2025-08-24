@@ -34,32 +34,14 @@ datasources:
     apiVersion: 1
     datasources:
       # Mimir datasource (primary metrics) - cluster metrics from cluster-monitoring
-      - name: Cluster-Mimir
+      - name: Prometheus
         type: prometheus
-        url: http://cluster-mimir-query-frontend.cluster-monitoring.svc.cluster.local:8080/prometheus
+        url: http://prometheus-server.monitoring.svc.cluster.local.
         access: proxy
         isDefault: true
         version: 1
         editable: true
         
-      # Loki datasource
-      - name: Loki
-        type: loki
-        url: http://loki:3100
-        access: proxy
-        isDefault: false
-        version: 1
-        editable: true
-        
-      # Mimir datasource for local long-term metrics storage (via nginx gateway)
-      - name: Local-Mimir
-        type: prometheus
-        url: http://mimir-nginx/prometheus
-        access: proxy
-        isDefault: false
-        version: 1
-        editable: true
-
 # Dashboard providers - use sidecar instead of file provider
 # dashboardProviders:
 #   dashboardproviders.yaml:
