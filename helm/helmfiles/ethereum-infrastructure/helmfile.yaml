@@ -1,5 +1,4 @@
 
-
 releases:
   - name: ethereum-infrastructure
     chart: ../../charts/ethereum-infrastructure
@@ -8,3 +7,4 @@ releases:
     version: 1.17.1
     values:
       - ../../values/ethereum-infrastructure/values.yaml
+

@@ -1,0 +1,91 @@
+# Loki configuration for log aggregation
+global:
+  image:
+    registry: docker.io
+
+deploymentMode: SimpleScalable
+
+loki:
+  # Basic configuration
+  auth_enabled: false
+  
+  # Storage configuration
+  commonConfig:
+    replication_factor: 1
+    
+  storage:
+    type: filesystem
+
+  # Schema configuration
+  schemaConfig:
+    configs:
+      - from: 2024-04-01
+        store: tsdb
+        object_store: filesystem
+        schema: v13
+        index:
+          prefix: loki_index_
+          period: 24h
+
+  # Limits configuration
+  limits_config:
+    retention_period: 168h  # 7 days
+    max_query_parallelism: 32
+    ingestion_rate_mb: 10
+    ingestion_burst_size_mb: 20
+
+# Single binary deployment for simplicity
+singleBinary:
+  replicas: 1
+  
+  persistence:
+    enabled: true
+    size: 20Gi
+    storageClass: standard
+
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+
+# Read component (disabled in single binary mode)
+read:
+  replicas: 0
+
+# Write component (disabled in single binary mode)
+write:
+  replicas: 0
+
+# Backend component (disabled in single binary mode)
+backend:
+  replicas: 0
+
+# Service configuration
+service:
+  type: ClusterIP
+  port: 3100
+
+# Disable unnecessary components for simple deployment
+gateway:
+  enabled: false
+
+# Test configuration
+test:
+  enabled: false
+
+# Monitoring
+monitoring:
+  selfMonitoring:
+    enabled: false
+    grafanaAgent:
+      installOperator: false
+
+# Disable chunk cache for simplicity
+chunksCache:
+  enabled: false
+
+resultsCache:
+  enabled: false

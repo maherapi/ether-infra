@@ -1,0 +1,130 @@
+# Grafana configuration for visualization
+global:
+  imageRegistry: docker.io
+
+# Admin credentials
+adminUser: admin
+# adminPassword: admin123  # Commented out - using secret instead
+
+# Persistence
+persistence:
+  enabled: true
+  size: 10Gi
+  storageClassName: standard
+  accessModes:
+    - ReadWriteOnce
+
+# Resources
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    cpu: 500m
+    memory: 1Gi
+
+# Service configuration
+service:
+  type: ClusterIP
+  port: 80
+
+# Datasources configuration
+datasources:
+  datasources.yaml:
+    apiVersion: 1
+    datasources:
+      # Mimir datasource (primary metrics) - cluster metrics from cluster-monitoring
+      - name: Cluster-Mimir
+        type: prometheus
+        url: http://cluster-mimir-query-frontend.cluster-monitoring.svc.cluster.local:8080/prometheus
+        access: proxy
+        isDefault: true
+        version: 1
+        editable: true
+        
+      # Loki datasource
+      - name: Loki
+        type: loki
+        url: http://loki:3100
+        access: proxy
+        isDefault: false
+        version: 1
+        editable: true
+        
+      # Mimir datasource for local long-term metrics storage (via nginx gateway)
+      - name: Local-Mimir
+        type: prometheus
+        url: http://mimir-nginx/prometheus
+        access: proxy
+        isDefault: false
+        version: 1
+        editable: true
+
+# Dashboard providers - use sidecar instead of file provider
+# dashboardProviders:
+#   dashboardproviders.yaml:
+#     apiVersion: 1
+#     providers:
+#       - name: 'default'
+#         orgId: 1
+#         folder: ''
+#         type: file
+#         disableDeletion: false
+#         editable: true
+#         options:
+#           path: /var/lib/grafana/dashboards/default
+
+# Admin password secret
+admin:
+  existingSecret: "grafana-admin-secret"
+  userKey: admin-user
+  passwordKey: admin-password
+
+# Grafana configuration
+grafana.ini:
+  server:
+    root_url: http://localhost:3000
+  security:
+    admin_user: admin
+    # admin_password removed - using secret instead
+  auth:
+    disable_login_form: false
+  auth.anonymous:
+    enabled: false
+  analytics:
+    check_for_updates: false
+  log:
+    mode: console
+    level: info
+
+# Environment variables
+env:
+  GF_SECURITY_ADMIN_USER: admin
+  # GF_SECURITY_ADMIN_PASSWORD removed - using secret instead
+
+# Sidecar for dashboard loading
+sidecar:
+  dashboards:
+    enabled: true
+    label: grafana_dashboard
+    folder: /tmp/dashboards
+    searchNamespace: ALL
+    provider:
+      allowUiUpdates: true
+      foldersFromFilesStructure: true
+  datasources:
+    enabled: false  # We define datasources above
+
+# Test framework
+testFramework:
+  enabled: false
+
+# Image pull policy
+image:
+  pullPolicy: IfNotPresent
+
+# Security context
+securityContext:
+  runAsUser: 472
+  runAsGroup: 472
+  fsGroup: 472

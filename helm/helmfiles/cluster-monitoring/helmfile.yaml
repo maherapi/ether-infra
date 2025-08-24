@@ -1,0 +1,27 @@
+# Cluster monitoring: Kubernetes, nodes, and system components with Mimir + Alloy
+# helm repo add grafana https://grafana.github.io/helm-charts
+
+repositories:
+  - name: grafana
+    url: https://grafana.github.io/helm-charts
+
+releases:
+  # Mimir for metrics storage (deployed first)
+  - name: cluster-mimir
+    chart: grafana/mimir-distributed
+    namespace: cluster-monitoring
+    createNamespace: true
+    version: ~5.6.0
+    values:
+      - ../../values/cluster-monitoring/mimir.yaml
+
+  # Grafana Alloy for metrics collection (sends to Mimir)
+  - name: cluster-alloy
+    chart: grafana/alloy
+    namespace: cluster-monitoring
+    createNamespace: true
+    version: ~0.10.0
+    needs:
+      - cluster-mimir
+    values:
+      - ../../values/cluster-monitoring/alloy.yaml
