@@ -41,6 +41,15 @@ datasources:
         isDefault: true
         version: 1
         editable: true
+
+      # Loki datasource
+      - name: Loki
+        type: loki
+        url: http://loki-stack.monitoring.svc.cluster.local.:3100
+        access: proxy
+        isDefault: false
+        version: 1
+        editable: true
         
 # Dashboard providers - use sidecar instead of file provider
 # dashboardProviders:

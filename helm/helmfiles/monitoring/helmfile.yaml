@@ -18,13 +18,13 @@ releases:
       - ../../values/monitoring/grafana-secret.yaml
 
   # Loki for log aggregation
-  - name: loki
-    chart: grafana/loki
+  - name: loki-stack
+    chart: grafana/loki-stack
     namespace: monitoring
     createNamespace: true
-    version: ~6.28.0
+    version: 2.10.2
     values:
-      - ../../values/monitoring/loki.yaml
+      - ../../values/monitoring/loki-stack.yaml
 
   # Prometheus for metrics storage
   - name: prometheus
@@ -43,7 +43,7 @@ releases:
     version: ~8.9.0
     needs:
       - grafana-secret
-      - loki
+      - loki-stack
       - prometheus
     values:
       - ../../values/monitoring/grafana.yaml

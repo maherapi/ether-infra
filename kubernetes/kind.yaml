@@ -5,6 +5,12 @@ name: ethereum-cluster
 nodes:
 # Control plane node
 - role: control-plane
+  kubeadmConfigPatches:
+  - |
+    kind: JoinConfiguration
+    nodeRegistration:
+      kubeletExtraArgs:
+        system-reserved: memory=1Gi,cpu=8
 
 # Worker node 1
 - role: worker
