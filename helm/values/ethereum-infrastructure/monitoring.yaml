@@ -1,0 +1,13 @@
+resources:
+  - apiVersion: monitoring.coreos.com/v1
+    kind: ServiceMonitor
+    name: ethereum-infrastructure-monitoring
+    namespace: ethereum-infrastructure
+    selector:
+      matchLabels:
+        app.kubernetes.io/name: ethereum-infrastructure
+    endpoints:
+      - port: metrics
+        interval: 30s
+        scheme: http
+        path: /debug/metrics/prometheus

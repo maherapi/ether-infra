@@ -8,3 +8,10 @@ releases:
     values:
       - ../../values/ethereum-infrastructure/values.yaml
 
+  - name: ethereum-infrastructure-monitoring
+    chart: ../../charts/raw
+    namespace: monitoring
+    createNamespace: true
+    version: 0.2.5
+    values:
+      - ../../values/ethereum-infrastructure/monitoring.yaml

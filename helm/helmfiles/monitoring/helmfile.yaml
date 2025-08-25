@@ -1,6 +1,4 @@
-# Observability stack: Loki, Grafana, Mimir
-# helm repo add grafana https://grafana.github.io/helm-charts
-
+# helmfile.yaml
 repositories:
   - name: grafana
     url: https://grafana.github.io/helm-charts
@@ -8,7 +6,7 @@ repositories:
     url: https://prometheus-community.github.io/helm-charts
 
 releases:
-  # Grafana admin secret (deployed first)
+  # Grafana admin secret
   - name: grafana-secret
     chart: ../../charts/raw
     namespace: monitoring
@@ -17,25 +15,26 @@ releases:
     values:
       - ../../values/monitoring/grafana-secret.yaml
 
-  # Loki for log aggregation
+  # kube-prometheus-stack (includes everything: Prometheus, Operator, CRDs, Node Exporter, AlertManager)
+  - name: kube-prometheus-stack
+    chart: prometheus-community/kube-prometheus-stack
+    namespace: monitoring
+    version: ~65.0.0
+    values:
+      - ../../values/monitoring/prometheus.yaml
+
+  # Loki stack (after kube-prometheus-stack so CRDs exist)
   - name: loki-stack
     chart: grafana/loki-stack
     namespace: monitoring
     createNamespace: true
     version: 2.10.2
+    needs:
+      - kube-prometheus-stack
     values:
       - ../../values/monitoring/loki-stack.yaml
 
-  # Prometheus for metrics storage
-  - name: prometheus
-    chart: prometheus-community/prometheus
-    namespace: monitoring
-    version: ~27.32.0
-    createNamespace: true
-    values:
-      - ../../values/monitoring/prometheus.yaml
-
-  # Grafana for visualization (deployed last to ensure datasources are ready)
+  # Grafana (deployed last)
   - name: grafana
     chart: grafana/grafana
     namespace: monitoring
@@ -43,7 +42,7 @@ releases:
     version: ~8.9.0
     needs:
       - grafana-secret
+      - kube-prometheus-stack
       - loki-stack
-      - prometheus
     values:
       - ../../values/monitoring/grafana.yaml

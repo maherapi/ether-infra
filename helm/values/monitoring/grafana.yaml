@@ -1,20 +1,61 @@
-# Grafana configuration for visualization
-global:
-  imageRegistry: docker.io
+# values/monitoring/grafana.yaml
+datasources:
+  datasources.yaml:
+    apiVersion: 1
+    datasources:
+      # Prometheus from kube-prometheus-stack
+      - name: Prometheus
+        type: prometheus
+        url: http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090
+        access: proxy
+        isDefault: true
+        version: 1
+        editable: true
+        
+      # Loki
+      - name: Loki
+        type: loki
+        url: http://loki-stack.monitoring.svc.cluster.local:3100
+        access: proxy
+        isDefault: false
+        version: 1
+        editable: true
 
-# Admin credentials
-adminUser: admin
-# adminPassword: admin123  # Commented out - using secret instead
+# Add pre-loaded dashboards
+dashboardProviders:
+  dashboardproviders.yaml:
+    apiVersion: 1
+    providers:
+    - name: 'kubernetes'
+      orgId: 1
+      folder: 'Kubernetes'
+      type: file
+      disableDeletion: false
+      editable: true
+      options:
+        path: /var/lib/grafana/dashboards/kubernetes
 
-# Persistence
+dashboards:
+  kubernetes:
+    # Cluster overview  
+    kubernetes-cluster:
+      gnetId: 7249
+      revision: 1
+      datasource: Prometheus
+    # Node metrics
+    node-exporter:
+      gnetId: 1860
+      revision: 31
+      datasource: Prometheus
+    # Loki logs
+    loki-logs:
+      gnetId: 13407
+      revision: 1
+      datasource: Loki
+
+# Your existing config
 persistence:
-  enabled: true
-  size: 10Gi
-  storageClassName: standard
-  accessModes:
-    - ReadWriteOnce
-
-# Resources
+  enabled: false
 resources:
   requests:
     cpu: 250m
@@ -22,100 +63,7 @@ resources:
   limits:
     cpu: 500m
     memory: 1Gi
-
-# Service configuration
-service:
-  type: ClusterIP
-  port: 80
-
-# Datasources configuration
-datasources:
-  datasources.yaml:
-    apiVersion: 1
-    datasources:
-      # Mimir datasource (primary metrics) - cluster metrics from cluster-monitoring
-      - name: Prometheus
-        type: prometheus
-        url: http://prometheus-server.monitoring.svc.cluster.local.
-        access: proxy
-        isDefault: true
-        version: 1
-        editable: true
-
-      # Loki datasource
-      - name: Loki
-        type: loki
-        url: http://loki-stack.monitoring.svc.cluster.local.:3100
-        access: proxy
-        isDefault: false
-        version: 1
-        editable: true
-        
-# Dashboard providers - use sidecar instead of file provider
-# dashboardProviders:
-#   dashboardproviders.yaml:
-#     apiVersion: 1
-#     providers:
-#       - name: 'default'
-#         orgId: 1
-#         folder: ''
-#         type: file
-#         disableDeletion: false
-#         editable: true
-#         options:
-#           path: /var/lib/grafana/dashboards/default
-
-# Admin password secret
 admin:
   existingSecret: "grafana-admin-secret"
   userKey: admin-user
   passwordKey: admin-password
-
-# Grafana configuration
-grafana.ini:
-  server:
-    root_url: http://localhost:3000
-  security:
-    admin_user: admin
-    # admin_password removed - using secret instead
-  auth:
-    disable_login_form: false
-  auth.anonymous:
-    enabled: false
-  analytics:
-    check_for_updates: false
-  log:
-    mode: console
-    level: info
-
-# Environment variables
-env:
-  GF_SECURITY_ADMIN_USER: admin
-  # GF_SECURITY_ADMIN_PASSWORD removed - using secret instead
-
-# Sidecar for dashboard loading
-sidecar:
-  dashboards:
-    enabled: true
-    label: grafana_dashboard
-    folder: /tmp/dashboards
-    searchNamespace: ALL
-    provider:
-      allowUiUpdates: true
-      foldersFromFilesStructure: true
-  datasources:
-    enabled: false  # We define datasources above
-
-# Test framework
-testFramework:
-  enabled: false
-
-# Image pull policy
-image:
-  pullPolicy: IfNotPresent
-
-# Security context
-securityContext:
-  runAsUser: 472
-  runAsGroup: 472
-  fsGroup: 472
